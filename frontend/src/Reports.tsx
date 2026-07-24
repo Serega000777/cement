@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bar, Line } from 'react-chartjs-2';
 import { BarElement, CategoryScale, Chart as ChartJS, Legend, LinearScale, LineElement, PointElement, Tooltip } from 'chart.js';
-import { BarChart3, Factory, Receipt, Trash2, TrendingUp } from 'lucide-react';
+import { BarChart3, Factory, Receipt, Trash2 } from 'lucide-react';
 import { api } from './api';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend);
@@ -40,5 +40,31 @@ export function WorkerStats() { const [period,setPeriod]=useState('month'),[rows
 
 export function Finance() { const [period,setPeriod]=useState('month'),[data,setData]=useState<FinanceData|null>(null);useEffect(()=>{api<FinanceData>(`/finance?period=${period}`).then(setData)},[period]);return <><PeriodTabs value={period} onChange={setPeriod}/>{data&&<><section className="hero finance-hero"><span>Чистая прибыль</span><strong className={data.profit<0?'negative':''}>{rub(data.profit)}</strong><div><span>Доход {rub(data.revenue)}</span><span>Расход {rub(data.costs)}</span></div></section><h2>Доходы</h2><div className="finance-list"><Row label="Цемент" value={data.income.cement}/><Row label="Песок" value={data.income.sand}/><Row label="Щебень" value={data.income.gravel}/></div><h2>Расходы</h2><div className="finance-list"><Row label="Зарплата" value={data.salary}/><Row label="Расходы предприятия" value={data.otherExpenses}/></div></>}</> }
 
-export function Analytics(){const [data,setData]=useState<AnalyticsData|null>(null);useEffect(()=>{api<AnalyticsData>('/analytics').then(setData)},[]);const days=useMemo(()=>Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10)}),[]);if(!data)return <div className="loader">Строим графики…</div>;const sum=(items:{date:string;amount?:number;bags?:number}[],day:string,key:'amount'|'bags')=>items.filter(x=>x.date.slice(0,10)===day).reduce((s,x)=>s+Number(x[key]||0),0);const labels=days.map(x=>date(x));const options={responsive:true,plugins:{legend:{position:'bottom' as const}},scales:{x:{grid:{display:false}},y:{beginAtZero:true}}};return <div className="charts"><article><h2>Производство, мешки</h2><Bar options={options} data={{labels,datasets:[{label:'Мешки',data:days.map(d=>sum(data.shifts,d,'bags')),backgroundColor:'#a9cc31',borderRadius:7}]}}/></article><article><h2>Продажи</h2><Line options={options} data={{labels,datasets:[{label:'Цемент',data:days.map(d=>sum(data.cement,d,'amount')),borderColor:'#20241d',backgroundColor:'#20241d'},{label:'Сыпучие',data:days.map(d=>sum(data.materials,d,'amount')),borderColor:'#a9cc31',backgroundColor:'#a9cc31'}]}}/></article><article><h2>Финансы</h2><Bar options={options} data={{labels,datasets:[{label:'Доход',data:days.map(d=>sum([...data.cement,...data.materials],d,'amount')),backgroundColor:'#a9cc31'},{label:'Расход',data:days.map(d=>sum(data.expenses,d,'amount')),backgroundColor:'#e79478'}]}}/></article></div>}
+export function Analytics(){
+  const [data,setData]=useState<AnalyticsData|null>(null);
+  useEffect(()=>{api<AnalyticsData>('/analytics').then(setData)},[]);
+  const days=useMemo(()=>Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);return d.toISOString().slice(0,10)}),[]);
+  if(!data)return <div className="loader">Строим графики…</div>;
+  const byDay=<T extends {date:string}>(items:T[],day:string,value:(item:T)=>number)=>items.filter(x=>x.date.slice(0,10)===day).reduce((sum,item)=>sum+value(item),0);
+  const labels=days.map(x=>date(x));
+  const income=days.map(day=>byDay(data.cement,day,x=>Number(x.amount))+byDay(data.materials,day,x=>Number(x.amount)));
+  const costs=days.map(day=>byDay(data.expenses.filter(x=>x.category!=='SALARY'),day,x=>Number(x.amount))+byDay(data.shifts,day,x=>Number(x.packagingPay)+Number(x.loadingPay)));
+  const options={responsive:true,plugins:{legend:{position:'bottom' as const}},scales:{x:{grid:{display:false}},y:{beginAtZero:true}}};
+  return <div className="charts">
+    <article><h2>Производство</h2><Bar options={options} data={{labels,datasets:[
+      {label:'Мешки',data:days.map(day=>byDay(data.shifts,day,x=>x.bags)),backgroundColor:'#a9cc31',borderRadius:7},
+      {label:'Тонны',data:days.map(day=>byDay(data.shifts,day,x=>Number(x.tons))),backgroundColor:'#596b19',borderRadius:7}
+    ]}}/></article>
+    <article><h2>Продажи</h2><Line options={options} data={{labels,datasets:[
+      {label:'Цемент',data:days.map(day=>byDay(data.cement,day,x=>Number(x.amount))),borderColor:'#20241d',backgroundColor:'#20241d'},
+      {label:'Песок',data:days.map(day=>byDay(data.materials.filter(x=>x.material==='SAND'),day,x=>Number(x.amount))),borderColor:'#c6a15b',backgroundColor:'#c6a15b'},
+      {label:'Щебень',data:days.map(day=>byDay(data.materials.filter(x=>x.material==='GRAVEL'),day,x=>Number(x.amount))),borderColor:'#7b8587',backgroundColor:'#7b8587'}
+    ]}}/></article>
+    <article><h2>Финансы</h2><Bar options={options} data={{labels,datasets:[
+      {label:'Доход',data:income,backgroundColor:'#a9cc31'},
+      {label:'Расход',data:costs,backgroundColor:'#e79478'},
+      {label:'Прибыль',data:income.map((value,index)=>value-costs[index]),backgroundColor:'#596b19'}
+    ]}}/></article>
+  </div>
+}
 function Row({label,value}:{label:string;value:number}){return <div><span>{label}</span><strong>{rub(value)}</strong></div>};function Empty(){return <div className="empty"><BarChart3/>Записей пока нет</div>}function category(key:string){return ({SALARY:'Зарплата',RENT:'Аренда',ELECTRICITY:'Электричество',FUEL:'Топливо',REPAIR:'Ремонт',PACKAGING:'Упаковка',OTHER:'Прочее'} as Record<string,string>)[key]||key}

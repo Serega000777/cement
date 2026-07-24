@@ -5,4 +5,5 @@ dist
 *.tsbuildinfo
 .idea
 .vscode
+.deploy/
 backend/prisma/dev.db

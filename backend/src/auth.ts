@@ -16,8 +16,12 @@ export const telegramAuth: RequestHandler = (req, res, next) => {
     return res.status(401).json({ error: 'Некорректная подпись Telegram' });
   }
   const authDate = Number(params.get('auth_date'));
-  if (!authDate || Date.now() / 1000 - authDate > 86400) return res.status(401).json({ error: 'Сессия Telegram устарела' });
-  const user = JSON.parse(params.get('user') || '{}') as TelegramUser;
+  const ageSeconds = Date.now() / 1000 - authDate;
+  if (!authDate || ageSeconds < -60 || ageSeconds > 86400) return res.status(401).json({ error: 'Сессия Telegram устарела' });
+  let user: TelegramUser;
+  try { user = JSON.parse(params.get('user') || '{}') as TelegramUser; }
+  catch { return res.status(401).json({ error: 'Некорректные данные пользователя Telegram' }); }
+  if (!Number.isSafeInteger(user.id) || user.id <= 0) return res.status(401).json({ error: 'Некорректный Telegram ID' });
   if (process.env.ADMIN_TELEGRAM_ID && String(user.id) !== process.env.ADMIN_TELEGRAM_ID) return res.status(403).json({ error: 'Доступ запрещён' });
   (req as typeof req & { telegramUser?: TelegramUser }).telegramUser = user;
   next();

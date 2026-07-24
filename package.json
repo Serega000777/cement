@@ -10,6 +10,10 @@
     "db:generate": "npm run db:generate -w backend",
     "db:migrate": "npm run db:migrate -w backend"
   },
-  "devDependencies": { "concurrently": "^9.1.2" }
+  "devDependencies": { "concurrently": "^9.1.2" },
+  "overrides": {
+    "body-parser": "2.3.0",
+    "qs": "6.15.3"
+  }
 }
 
