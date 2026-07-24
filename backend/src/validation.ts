@@ -1,4 +1,4 @@
-import { ExpenseCategory, Material } from '@prisma/client';
+import { CementGrade, ExpenseCategory, Material } from '@prisma/client';
 
 export class InputError extends Error {
   status = 400;
@@ -59,6 +59,11 @@ export function workerIds(value: unknown) {
 export function material(value: unknown) {
   if (!Object.values(Material).includes(value as Material)) throw new InputError('Выберите песок или щебень');
   return value as Material;
+}
+
+export function cementGrade(value: unknown) {
+  if (!Object.values(CementGrade).includes(value as CementGrade)) throw new InputError('Выберите марку цемента М500 или М600');
+  return value as CementGrade;
 }
 
 export function expenseCategory(value: unknown) {
