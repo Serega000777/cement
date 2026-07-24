@@ -88,13 +88,25 @@ app.get('/api/barrels', async (_req, res) => {
       const used = b.shifts.filter(x => x.grade === grade).reduce((s, x) => s + n(x.tons), 0);
       return [grade, { received, used, remaining: received - used }];
     }));
-    return { id: b.id, name: b.name, received: Object.values(grades).reduce((s, x) => s + x.received, 0), used: Object.values(grades).reduce((s, x) => s + x.used, 0), grades };
+    const activeGrade = (['M500', 'M600'] as const).find(grade => grades[grade].remaining > 0.0005) ?? null;
+    return { id: b.id, name: b.id === 1 ? 'Бочка №1 (большая)' : 'Бочка №2 (маленькая)', received: Object.values(grades).reduce((s, x) => s + x.received, 0), used: Object.values(grades).reduce((s, x) => s + x.used, 0), grades, activeGrade };
   }));
 });
 app.post('/api/cement', async (req, res) => {
   const tons = positiveNumber(req.body.tons, 'Количество тонн');
   const price = positiveNumber(req.body.pricePerTon, 'Цена за тонну');
-  res.status(201).json(await prisma.barrelOperation.create({ data: { barrelId: barrelId(req.body.barrelId), grade: cementGrade(req.body.grade), type: BarrelOperationType.RECEIPT, date: calendarDate(req.body.date), tons, pricePerTon: price, amount: tons * price } }));
+  const selectedBarrel = barrelId(req.body.barrelId);
+  const grade = cementGrade(req.body.grade);
+  const result = await prisma.$transaction(async tx => {
+    const [received, used] = await Promise.all([
+      tx.barrelOperation.groupBy({ by: ['grade'], where: { barrelId: selectedBarrel, type: 'RECEIPT' }, _sum: { tons: true } }),
+      tx.shift.groupBy({ by: ['grade'], where: { barrelId: selectedBarrel }, _sum: { tons: true } })
+    ]);
+    const otherGrade = (['M500', 'M600'] as const).find(item => item !== grade && n(received.find(x => x.grade === item)?._sum.tons) - n(used.find(x => x.grade === item)?._sum.tons) > 0.0005);
+    if (otherGrade) throw new InputError(`В бочке ещё находится цемент ${otherGrade}. Сначала израсходуйте его полностью`);
+    return tx.barrelOperation.create({ data: { barrelId: selectedBarrel, grade, type: BarrelOperationType.RECEIPT, date: calendarDate(req.body.date), tons, pricePerTon: price, amount: tons * price } });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  res.status(201).json(result);
 });
 app.get('/api/cement', async (_req, res) => res.json(await prisma.barrelOperation.findMany({ where: { type: 'RECEIPT' }, include: { barrel: true }, orderBy: { date: 'desc' } })));
 
