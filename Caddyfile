@@ -13,3 +13,7 @@ crm-cement.ru {
     reverse_proxy frontend:80
   }
 }
+
+www.crm-cement.ru {
+  redir https://crm-cement.ru{uri} permanent
+}
