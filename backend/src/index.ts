@@ -224,6 +224,18 @@ app.post('/api/historical-bags', async (req, res) => {
 });
 app.delete('/api/historical-bags/:id', async (req, res) => res.json(await prisma.historicalBagEntry.delete({ where: { id: positiveInteger(req.params.id, 'ID стартовой записи') } })));
 
+app.get('/api/dashboard/details', async (_req, res) => {
+  const [shifts, cementSales, materialSales, expenses, historicalBags, collections] = await Promise.all([
+    prisma.shift.findMany({ include: { workers: { include: { worker: true } }, barrel: true }, orderBy: { date: 'desc' } }),
+    prisma.cementSale.findMany({ orderBy: { date: 'desc' } }),
+    prisma.materialSale.findMany({ orderBy: { date: 'desc' } }),
+    prisma.expense.findMany({ orderBy: { date: 'desc' } }),
+    prisma.historicalBagEntry.findMany({ orderBy: { date: 'desc' } }),
+    prisma.cashCollection.findMany({ orderBy: { createdAt: 'desc' } })
+  ]);
+  res.json({ shifts, cementSales, materialSales, expenses, historicalBags, collections });
+});
+
 app.get('/api/dashboard', async (_req, res) => {
   const today = startOfMoscowPeriod('day'), month = startOfMoscowPeriod('month');
   const [shifts, cement, materials, financeMaterials, expenses, allMade, allSold, historical] = await Promise.all([
