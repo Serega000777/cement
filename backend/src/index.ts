@@ -62,11 +62,12 @@ app.delete('/api/shifts/:id', async (req, res) => {
   const id = positiveInteger(req.params.id, 'ID смены');
   const result = await prisma.$transaction(async tx => {
     const shift = await tx.shift.findUniqueOrThrow({ where: { id } });
-    const [produced, sold] = await Promise.all([
+    const [produced, sold, historical] = await Promise.all([
       tx.shift.aggregate({ where: { grade: shift.grade }, _sum: { bags: true } }),
-      tx.cementSale.aggregate({ where: { grade: shift.grade }, _sum: { bags: true } })
+      tx.cementSale.aggregate({ where: { grade: shift.grade }, _sum: { bags: true } }),
+      tx.historicalBagEntry.aggregate({ where: { grade: shift.grade }, _sum: { producedBags: true, soldBags: true } })
     ]);
-    if (n(produced._sum.bags) - shift.bags < n(sold._sum.bags)) throw new InputError('Нельзя удалить смену: произведённые мешки уже проданы');
+    if (n(produced._sum.bags) + n(historical._sum.producedBags) - shift.bags < n(sold._sum.bags) + n(historical._sum.soldBags)) throw new InputError('Нельзя удалить смену: произведённые мешки уже проданы');
     return tx.shift.delete({ where: { id } });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   res.json(result);
@@ -116,9 +117,9 @@ app.post('/api/sales', async (req, res) => {
   const price = positiveNumber(req.body.pricePerBag, 'Цена за мешок');
   const grade = cementGrade(req.body.grade);
   const result = await prisma.$transaction(async tx => {
-    const [made, sold] = await Promise.all([tx.shift.aggregate({ where: { grade }, _sum: { bags: true } }), tx.cementSale.aggregate({ where: { grade }, _sum: { bags: true } })]);
-    if (n(made._sum.bags) - n(sold._sum.bags) < bags) throw new InputError('Недостаточно мешков');
-    return tx.cementSale.create({ data: { date: calendarDate(req.body.date), client: requiredText(req.body.client, 'Клиент', 150), grade, bags, pricePerBag: price, amount: bags * price } });
+    const [made, sold, historical] = await Promise.all([tx.shift.aggregate({ where: { grade }, _sum: { bags: true } }), tx.cementSale.aggregate({ where: { grade }, _sum: { bags: true } }), tx.historicalBagEntry.aggregate({ where: { grade }, _sum: { producedBags: true, soldBags: true } })]);
+    if (n(made._sum.bags) + n(historical._sum.producedBags) - n(sold._sum.bags) - n(historical._sum.soldBags) < bags) throw new InputError('Недостаточно мешков');
+    return tx.cementSale.create({ data: { date: calendarDate(req.body.date), client: optionalText(req.body.client, 150) ?? 'Без клиента', grade, bags, pricePerBag: price, amount: bags * price } });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   res.status(201).json(result);
 });
@@ -139,20 +140,61 @@ app.post('/api/expenses', async (req, res) => res.status(201).json(await prisma.
 app.get('/api/expenses/summary', async (req, res) => { const result = await prisma.expense.aggregate({ where: { date: { gte: startOfMoscowPeriod(req.query.period) } }, _sum: { amount: true } }); res.json({ amount: n(result._sum.amount) }); });
 app.delete('/api/expenses/:id', async (req, res) => res.json(await prisma.expense.delete({ where: { id: positiveInteger(req.params.id, 'ID расхода') } })));
 
+async function cashBalance(tx: Prisma.TransactionClient | PrismaClient) {
+  const last = await tx.cashCollection.findFirst({ orderBy: { createdAt: 'desc' } });
+  const after = last ? { gt: last.createdAt } : undefined;
+  const [cement, materials, expenses, shifts] = await Promise.all([
+    tx.cementSale.aggregate({ where: { createdAt: after }, _sum: { amount: true } }),
+    tx.materialSale.aggregate({ where: { createdAt: after }, _sum: { amount: true } }),
+    tx.expense.aggregate({ where: { createdAt: after, category: { not: 'SALARY' } }, _sum: { amount: true } }),
+    tx.shift.aggregate({ where: { createdAt: after }, _sum: { packagingPay: true, loadingPay: true } })
+  ]);
+  const income = n(cement._sum.amount) + n(materials._sum.amount);
+  const costs = n(expenses._sum.amount) + n(shifts._sum.packagingPay) + n(shifts._sum.loadingPay);
+  return { balance: income - costs, income, costs, since: last?.createdAt ?? null };
+}
+app.get('/api/cash', async (_req, res) => res.json({ ...await cashBalance(prisma), collections: await prisma.cashCollection.findMany({ orderBy: { createdAt: 'desc' }, take: 20 }) }));
+app.post('/api/cash/collect', async (_req, res) => {
+  const result = await prisma.$transaction(async tx => {
+    const cash = await cashBalance(tx);
+    if (cash.balance <= 0) throw new InputError('В кассе нет денег для инкассации');
+    return tx.cashCollection.create({ data: { amount: cash.balance } });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  res.status(201).json(result);
+});
+
+app.get('/api/concrete', async (_req, res) => res.json(await prisma.concreteNorm.findMany({ orderBy: { name: 'asc' } })));
+app.post('/api/concrete', async (req, res) => res.status(201).json(await prisma.concreteNorm.create({ data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента') } })));
+app.patch('/api/concrete/:id', async (req, res) => res.json(await prisma.concreteNorm.update({ where: { id: positiveInteger(req.params.id, 'ID нормы') }, data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента') } })));
+app.delete('/api/concrete/:id', async (req, res) => res.json(await prisma.concreteNorm.delete({ where: { id: positiveInteger(req.params.id, 'ID нормы') } })));
+
+app.get('/api/historical-bags', async (_req, res) => res.json(await prisma.historicalBagEntry.findMany({ orderBy: [{ date: 'desc' }, { grade: 'asc' }] })));
+app.post('/api/historical-bags', async (req, res) => {
+  const date = calendarDate(req.body.date);
+  if (date > new Date('2026-07-23T23:59:59.999Z')) throw new InputError('Стартовые данные можно внести только по 23.07.2026 включительно');
+  const grade = cementGrade(req.body.grade);
+  const producedBags = nonNegativeNumber(req.body.producedBags, 'Нафасовано');
+  const soldBags = nonNegativeNumber(req.body.soldBags, 'Продано');
+  if (!Number.isInteger(producedBags) || !Number.isInteger(soldBags)) throw new InputError('Количество мешков должно быть целым числом');
+  res.status(201).json(await prisma.historicalBagEntry.upsert({ where: { date_grade: { date, grade } }, update: { producedBags, soldBags }, create: { date, grade, producedBags, soldBags } }));
+});
+app.delete('/api/historical-bags/:id', async (req, res) => res.json(await prisma.historicalBagEntry.delete({ where: { id: positiveInteger(req.params.id, 'ID стартовой записи') } })));
+
 app.get('/api/dashboard', async (_req, res) => {
   const today = startOfMoscowPeriod('day'), month = startOfMoscowPeriod('month');
-  const [shifts, cement, materials, expenses, allMade, allSold] = await Promise.all([
+  const [shifts, cement, materials, expenses, allMade, allSold, historical] = await Promise.all([
     prisma.shift.findMany({ where: { date: { gte: today } }, include: { workers: true } }), prisma.cementSale.aggregate({ where: { date: { gte: today } }, _sum: { amount: true, bags: true } }),
     prisma.materialSale.groupBy({ by: ['material'], where: { date: { gte: today } }, _sum: { amount: true, tons: true } }), prisma.expense.aggregate({ where: { date: { gte: today }, category: { not: 'SALARY' } }, _sum: { amount: true } }),
-    prisma.shift.groupBy({ by: ['grade'], _sum: { bags: true } }), prisma.cementSale.groupBy({ by: ['grade'], _sum: { bags: true } })]);
+    prisma.shift.groupBy({ by: ['grade'], _sum: { bags: true } }), prisma.cementSale.groupBy({ by: ['grade'], _sum: { bags: true } }),
+    prisma.historicalBagEntry.groupBy({ by: ['grade'], _sum: { producedBags: true, soldBags: true } })]);
   const salary = shifts.reduce((s, x) => s + n(x.packagingPay) + n(x.loadingPay), 0), revenue = n(cement._sum.amount) + materials.reduce((s, x) => s + n(x._sum.amount), 0), costs = n(expenses._sum.amount) + salary;
   const monthRevenue = await prisma.cementSale.aggregate({ where: { date: { gte: month } }, _sum: { amount: true } });
   const grades = Object.fromEntries(['M500', 'M600'].map(grade => {
-    const produced = n(allMade.find(x => x.grade === grade)?._sum.bags);
-    const sold = n(allSold.find(x => x.grade === grade)?._sum.bags);
+    const produced = n(allMade.find(x => x.grade === grade)?._sum.bags) + n(historical.find(x => x.grade === grade)?._sum.producedBags);
+    const sold = n(allSold.find(x => x.grade === grade)?._sum.bags) + n(historical.find(x => x.grade === grade)?._sum.soldBags);
     return [grade, { produced, sold, remaining: produced - sold }];
   }));
-  res.json({ production: { bags: shifts.reduce((s, x) => s + x.bags, 0), tons: shifts.reduce((s, x) => s + n(x.tons), 0) }, workers: new Set(shifts.flatMap(x => x.workers.map(w => w.workerId))).size, salary, sales: { cement: n(cement._sum.amount), sand: n(materials.find(x => x.material === 'SAND')?._sum.amount), gravel: n(materials.find(x => x.material === 'GRAVEL')?._sum.amount) }, expenses: n(expenses._sum.amount), finance: { revenue, costs, profit: revenue - costs }, stock: { bags: Object.values(grades).reduce((s, x) => s + x.remaining, 0), produced: Object.values(grades).reduce((s, x) => s + x.produced, 0), sold: Object.values(grades).reduce((s, x) => s + x.sold, 0), grades, monthRevenue: n(monthRevenue._sum.amount) } });
+  res.json({ production: { bags: shifts.reduce((s, x) => s + x.bags, 0), tons: shifts.reduce((s, x) => s + n(x.tons), 0) }, workers: new Set(shifts.flatMap(x => x.workers.map(w => w.workerId))).size, salary, sales: { cement: n(cement._sum.amount), sand: n(materials.find(x => x.material === 'SAND')?._sum.amount), gravel: n(materials.find(x => x.material === 'GRAVEL')?._sum.amount) }, expenses: n(expenses._sum.amount), finance: { revenue, costs, profit: revenue - costs }, cash: await cashBalance(prisma), stock: { bags: Object.values(grades).reduce((s, x) => s + x.remaining, 0), produced: Object.values(grades).reduce((s, x) => s + x.produced, 0), sold: Object.values(grades).reduce((s, x) => s + x.sold, 0), grades, monthRevenue: n(monthRevenue._sum.amount) } });
 });
 
 app.get('/api/analytics', async (_req, res) => {

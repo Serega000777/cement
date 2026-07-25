@@ -1,6 +1,6 @@
 export const BAG_KG = 25;
 export const PACKAGING_RATE = 2500;
-export const LOADING_RATE = 200;
+export const LOADING_RATE = 100;
 
 export function calculateShift(bags: number, loadingTons: number, workerCount: number) {
   if (!Number.isInteger(bags) || bags <= 0) throw new Error('Количество мешков должно быть положительным целым числом');
@@ -14,4 +14,3 @@ export function calculateShift(bags: number, loadingTons: number, workerCount: n
 
 export const remainingBags = (produced: number, sold: number) => Math.max(0, produced - sold);
 export const profit = (revenue: number, expenses: number) => revenue - expenses;
-

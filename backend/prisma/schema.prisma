@@ -122,3 +122,29 @@ model Expense {
   comment String?
   createdAt DateTime @default(now())
 }
+
+model CashCollection {
+  id Int @id @default(autoincrement())
+  amount Decimal @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+}
+
+model ConcreteNorm {
+  id Int @id @default(autoincrement())
+  name String
+  grade CementGrade
+  cementKgPerM3 Decimal @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model HistoricalBagEntry {
+  id Int @id @default(autoincrement())
+  date DateTime
+  grade CementGrade
+  producedBags Int
+  soldBags Int
+  createdAt DateTime @default(now())
+
+  @@unique([date, grade])
+}
