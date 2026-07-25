@@ -111,6 +111,7 @@ model MaterialSale {
   tons Decimal @db.Decimal(12, 3)
   pricePerTon Decimal @db.Decimal(14, 2)
   amount Decimal @db.Decimal(14, 2)
+  includeInFinance Boolean @default(false)
   createdAt DateTime @default(now())
 }
 
