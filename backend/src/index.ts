@@ -187,14 +187,17 @@ async function cashBalance(tx: Prisma.TransactionClient | PrismaClient) {
   const last = await tx.cashCollection.findFirst({ orderBy: { createdAt: 'desc' } });
   const cashStart = new Date('2026-07-21T00:00:00.000Z');
   const operationWhere = last ? { createdAt: { gt: last.createdAt } } : { date: { gte: cashStart } };
-  const [cement, materials, expenses, shifts] = await Promise.all([
+  const [cement, materials, expenses, shifts, adjustments] = await Promise.all([
     tx.cementSale.aggregate({ where: operationWhere, _sum: { amount: true } }),
     tx.materialSale.aggregate({ where: { ...operationWhere, includeInFinance: true }, _sum: { amount: true } }),
     tx.expense.aggregate({ where: { ...operationWhere, category: { not: 'SALARY' } }, _sum: { amount: true } }),
-    tx.shift.aggregate({ where: operationWhere, _sum: { packagingPay: true, loadingPay: true } })
+    tx.shift.aggregate({ where: operationWhere, _sum: { packagingPay: true, loadingPay: true } }),
+    tx.cashAdjustment.findMany({ where: operationWhere })
   ]);
-  const income = n(cement._sum.amount) + n(materials._sum.amount);
-  const costs = n(expenses._sum.amount) + n(shifts._sum.packagingPay) + n(shifts._sum.loadingPay);
+  const incomeAdjustments = adjustments.filter(x => n(x.amount) > 0).reduce((sum, x) => sum + n(x.amount), 0);
+  const costAdjustments = adjustments.filter(x => n(x.amount) < 0).reduce((sum, x) => sum + Math.abs(n(x.amount)), 0);
+  const income = n(cement._sum.amount) + n(materials._sum.amount) + incomeAdjustments;
+  const costs = n(expenses._sum.amount) + n(shifts._sum.packagingPay) + n(shifts._sum.loadingPay) + costAdjustments;
   return { balance: income - costs, income, costs, since: last?.createdAt ?? null };
 }
 app.get('/api/cash', async (_req, res) => res.json({ ...await cashBalance(prisma), collections: await prisma.cashCollection.findMany({ orderBy: { createdAt: 'desc' }, take: 20 }) }));
@@ -225,15 +228,16 @@ app.post('/api/historical-bags', async (req, res) => {
 app.delete('/api/historical-bags/:id', async (req, res) => res.json(await prisma.historicalBagEntry.delete({ where: { id: positiveInteger(req.params.id, 'ID стартовой записи') } })));
 
 app.get('/api/dashboard/details', async (_req, res) => {
-  const [shifts, cementSales, materialSales, expenses, historicalBags, collections] = await Promise.all([
+  const [shifts, cementSales, materialSales, expenses, historicalBags, collections, cashAdjustments] = await Promise.all([
     prisma.shift.findMany({ include: { workers: { include: { worker: true } }, barrel: true }, orderBy: { date: 'desc' } }),
     prisma.cementSale.findMany({ orderBy: { date: 'desc' } }),
     prisma.materialSale.findMany({ orderBy: { date: 'desc' } }),
     prisma.expense.findMany({ orderBy: { date: 'desc' } }),
     prisma.historicalBagEntry.findMany({ orderBy: { date: 'desc' } }),
-    prisma.cashCollection.findMany({ orderBy: { createdAt: 'desc' } })
+    prisma.cashCollection.findMany({ orderBy: { createdAt: 'desc' } }),
+    prisma.cashAdjustment.findMany({ orderBy: { date: 'desc' } })
   ]);
-  res.json({ shifts, cementSales, materialSales, expenses, historicalBags, collections });
+  res.json({ shifts, cementSales, materialSales, expenses, historicalBags, collections, cashAdjustments });
 });
 
 app.get('/api/dashboard', async (_req, res) => {

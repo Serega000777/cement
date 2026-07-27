@@ -130,6 +130,14 @@ model CashCollection {
   createdAt DateTime @default(now())
 }
 
+model CashAdjustment {
+  id Int @id @default(autoincrement())
+  date DateTime
+  amount Decimal @db.Decimal(14, 2)
+  note String
+  createdAt DateTime @default(now())
+}
+
 model ConcreteNorm {
   id Int @id @default(autoincrement())
   name String
