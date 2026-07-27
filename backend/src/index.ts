@@ -129,6 +129,12 @@ app.patch('/api/cement/:id', async (req, res) => {
   const result = await prisma.$transaction(async tx => {
     const current = await tx.barrelOperation.findUniqueOrThrow({ where: { id } });
     if (current.type !== BarrelOperationType.RECEIPT) throw new InputError('Можно редактировать только приход');
+    if (current.grade !== grade && current.barrelId === selectedBarrel) {
+      await tx.shift.updateMany({
+        where: { barrelId: current.barrelId, grade: current.grade },
+        data: { grade }
+      });
+    }
     const affected = new Set([`${current.barrelId}:${current.grade}`, `${selectedBarrel}:${grade}`]);
     for (const key of affected) {
       const [barrel, itemGrade] = key.split(':') as [string, 'M500' | 'M600'];
