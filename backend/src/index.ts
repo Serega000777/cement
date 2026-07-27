@@ -271,14 +271,17 @@ app.get('/api/analytics', async (_req, res) => {
 });
 app.get('/api/finance', async (req, res) => {
   const from = startOfMoscowPeriod(req.query.period);
-  const [cement, materials, expenses, shifts] = await Promise.all([
+  const [cement, materials, expenses, shifts, adjustments] = await Promise.all([
     prisma.cementSale.aggregate({ where: { date: { gte: from } }, _sum: { amount: true } }),
     prisma.materialSale.groupBy({ by: ['material'], where: { date: { gte: from }, includeInFinance: true }, _sum: { amount: true, tons: true } }),
     prisma.expense.groupBy({ by: ['category'], where: { date: { gte: from }, category: { not: 'SALARY' } }, _sum: { amount: true } }),
-    prisma.shift.aggregate({ where: { date: { gte: from } }, _sum: { packagingPay: true, loadingPay: true } })
+    prisma.shift.aggregate({ where: { date: { gte: from } }, _sum: { packagingPay: true, loadingPay: true } }),
+    prisma.cashAdjustment.findMany({ where: { date: { gte: from } } })
   ]);
-  const income = { cement: n(cement._sum.amount), sand: n(materials.find(x => x.material === 'SAND')?._sum.amount), gravel: n(materials.find(x => x.material === 'GRAVEL')?._sum.amount) };
-  const salary = n(shifts._sum.packagingPay) + n(shifts._sum.loadingPay), otherExpenses = expenses.reduce((sum, x) => sum + n(x._sum.amount), 0);
+  const incomeAdjustment = adjustments.filter(x => n(x.amount) > 0).reduce((sum, x) => sum + n(x.amount), 0);
+  const expenseAdjustment = adjustments.filter(x => n(x.amount) < 0).reduce((sum, x) => sum + Math.abs(n(x.amount)), 0);
+  const income = { cement: n(cement._sum.amount) + incomeAdjustment, sand: n(materials.find(x => x.material === 'SAND')?._sum.amount), gravel: n(materials.find(x => x.material === 'GRAVEL')?._sum.amount) };
+  const salary = n(shifts._sum.packagingPay) + n(shifts._sum.loadingPay), otherExpenses = expenses.reduce((sum, x) => sum + n(x._sum.amount), 0) + expenseAdjustment;
   const revenue = income.cement + income.sand + income.gravel, costs = salary + otherExpenses;
   res.json({ period: req.query.period || 'month', income, salary, otherExpenses, revenue, costs, profit: revenue - costs, expenseBreakdown: expenses });
 });
