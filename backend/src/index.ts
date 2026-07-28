@@ -337,7 +337,8 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.searchParams.set('v', '20260728-2');
+  webAppUrl.pathname = '/app-20260728-3';
+  webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
   void (async () => {
