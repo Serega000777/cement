@@ -51,7 +51,7 @@ export function Analytics(){
   if(!data)return <div className="loader">Строим графики…</div>;
   const byDay=<T extends {date:string}>(items:T[],day:string,value:(item:T)=>number)=>items.filter(x=>x.date.slice(0,10)===day).reduce((sum,item)=>sum+value(item),0);
   const labels=days.map(x=>date(x));
-  const income=days.map(day=>byDay(data.cement,day,x=>Number(x.amount))+byDay(data.concrete,day,x=>Number(x.amount))+byDay(data.materials,day,x=>Number(x.amount)));
+  const income=days.map(day=>byDay(data.cement,day,x=>Number(x.amount))+byDay(data.concrete,day,x=>Number(x.amount)));
   const costs=days.map(day=>byDay(data.expenses.filter(x=>x.category!=='SALARY'),day,x=>Number(x.amount))+byDay(data.shifts,day,x=>Number(x.packagingPay)+Number(x.loadingPay)));
   const options={responsive:true,plugins:{legend:{position:'bottom' as const}},scales:{x:{grid:{display:false}},y:{beginAtZero:true}}};
   return <div className="charts">
