@@ -104,6 +104,17 @@ model CementSale {
   createdAt DateTime @default(now())
 }
 
+model ConcreteSale {
+  id Int @id @default(autoincrement())
+  date DateTime
+  concreteGrade String
+  address String
+  volume Decimal @db.Decimal(12, 3)
+  pricePerM3 Decimal @db.Decimal(14, 2)
+  amount Decimal @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+}
+
 model MaterialSale {
   id Int @id @default(autoincrement())
   date DateTime

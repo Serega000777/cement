@@ -9,11 +9,11 @@ const rub = (v = 0) => new Intl.NumberFormat('ru-RU', { style: 'currency', curre
 const date = (value: string) => new Date(value).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
 
 export type ShiftRow = { id:number;date:string;grade:'M500'|'M600';bags:number;tons:number;loadingTons:number;packagingPay:number;loadingPay:number;barrel:{name:string};workers:{worker:{name:string};salary:number}[] };
-type Sale = { id:number;date:string;grade?:'M500'|'M600';client?:string;bags?:number;material?:'SAND'|'GRAVEL';tons?:number;amount:number };
+type Sale = { id:number;date:string;grade?:'M500'|'M600';client?:string;bags?:number;material?:'SAND'|'GRAVEL';tons?:number;concreteGrade?:string;address?:string;volume?:number;amount:number;kind?:'cement'|'concrete' };
 type ExpenseRow = { id:number;date:string;category:string;amount:number;comment?:string };
 type HistoricalBagRow = { id:number;date:string;grade:'M500'|'M600';producedBags:number;soldBags:number };
-type AnalyticsData = { shifts:ShiftRow[];cement:Sale[];materials:Sale[];expenses:ExpenseRow[];historicalBags:HistoricalBagRow[] };
-type FinanceData = { income:{cement:number;sand:number;gravel:number};salary:number;otherExpenses:number;revenue:number;costs:number;profit:number };
+type AnalyticsData = { shifts:ShiftRow[];cement:Sale[];concrete:Sale[];materials:Sale[];expenses:ExpenseRow[];historicalBags:HistoricalBagRow[] };
+type FinanceData = { income:{cement:number;concrete:number;sand:number;gravel:number};salary:number;otherExpenses:number;revenue:number;costs:number;profit:number };
 type WorkerStat = {id:number;name:string;position:string;active:boolean;workDays:number;shifts:number;tons:number;earnings:number};
 
 export function PeriodTabs({value,onChange}:{value:string;onChange:(value:string)=>void}) { return <div className="period-tabs">{[['day','День'],['week','Неделя'],['month','Месяц']].map(([key,label])=><button className={value===key?'selected':''} onClick={()=>onChange(key)} key={key}>{label}</button>)}</div> }
@@ -34,15 +34,15 @@ export function Production({reload}:{reload:()=>void}) {
 
 export function Operations({kind,reload}:{kind:'sales'|'materials'|'expenses';reload:()=>void}) {
  const [rows,setRows]=useState<(Sale|ExpenseRow)[]>([]);
- const load=()=> kind==='expenses'?api<ExpenseRow[]>('/expenses').then(setRows):api<{cement:Sale[];materials:Sale[]}>('/sales').then(x=>setRows(kind==='sales'?x.cement:x.materials)); useEffect(()=>{void load()},[kind]);
- const remove=async(id:number)=>{if(!confirm('Удалить запись?'))return;await api(`/${kind}/${id}`,{method:'DELETE'});load();reload()};
+ const load=()=> kind==='expenses'?api<ExpenseRow[]>('/expenses').then(setRows):api<{cement:Sale[];concrete:Sale[];materials:Sale[]}>('/sales').then(x=>setRows(kind==='sales'?[...x.cement.map(s=>({...s,kind:'cement' as const})),...x.concrete.map(s=>({...s,kind:'concrete' as const}))].sort((a,b)=>b.date.localeCompare(a.date)):x.materials)); useEffect(()=>{void load()},[kind]);
+ const remove=async(x:Sale|ExpenseRow)=>{if(!confirm('Удалить запись?'))return;const path=kind==='sales'&&(x as Sale).kind==='concrete'?`/concrete-sales/${x.id}`:`/${kind}/${x.id}`;await api(path,{method:'DELETE'});load();reload()};
  const editExpense=async(x:ExpenseRow)=>{const amount=prompt('Новая сумма расхода, ₽',String(x.amount));if(amount===null)return;const comment=prompt('Комментарий',x.comment||'')??x.comment??'';await api(`/expenses/${x.id}`,{method:'PATCH',body:JSON.stringify({date:x.date.slice(0,10),category:x.category,amount,comment})});load();reload()};
- return <><h2>История операций</h2><div className="list">{rows.map(x=><div className="history compact" key={x.id}><div><strong>{'client'in x&&x.client?`${x.client}${x.grade?` · ${x.grade}`:''}`:'material'in x?(x.material==='SAND'?'Песок':'Щебень'):(x as ExpenseRow).comment||category((x as ExpenseRow).category)}</strong><small>{date(x.date)} · {'bags'in x&&x.bags?`${x.bags} меш.`:'tons'in x&&x.tons?`${Number(x.tons).toFixed(2)} т`:category((x as ExpenseRow).category)}</small></div><b>{rub(Number(x.amount))}</b>{kind==='expenses'&&<button className="icon-button" onClick={()=>editExpense(x as ExpenseRow)} title="Изменить расход"><Pencil/></button>}<button className="icon-button danger" onClick={()=>remove(x.id)}><Trash2/></button></div>)}{!rows.length&&<Empty/>}</div></>;
+ return <><h2>История операций</h2><div className="list">{rows.map(x=><div className="history compact" key={`${(x as Sale).kind||kind}-${x.id}`}><div><strong>{(x as Sale).kind==='concrete'?`Бетон ${(x as Sale).concreteGrade} · ${(x as Sale).address}`:'client'in x&&x.client?`${x.client}${x.grade?` · ${x.grade}`:''}`:'material'in x?(x.material==='SAND'?'Песок':'Щебень'):(x as ExpenseRow).comment||category((x as ExpenseRow).category)}</strong><small>{date(x.date)} · {(x as Sale).kind==='concrete'?`${Number((x as Sale).volume).toFixed(2)} м³`:'bags'in x&&x.bags?`${x.bags} меш.`:'tons'in x&&x.tons?`${Number(x.tons).toFixed(2)} т`:category((x as ExpenseRow).category)}</small></div><b>{rub(Number(x.amount))}</b>{kind==='expenses'&&<button className="icon-button" onClick={()=>editExpense(x as ExpenseRow)} title="Изменить расход"><Pencil/></button>}<button className="icon-button danger" onClick={()=>remove(x)}><Trash2/></button></div>)}{!rows.length&&<Empty/>}</div></>;
 }
 
 export function WorkerStats() { const [period,setPeriod]=useState('month'),[rows,setRows]=useState<WorkerStat[]>([]);useEffect(()=>{api<WorkerStat[]>(`/workers/stats?period=${period}`).then(setRows)},[period]);return <><PeriodTabs value={period} onChange={setPeriod}/><div className="list">{rows.map(x=><div className="worker-stat" key={x.id}><div><strong>{x.name}</strong><small>{x.position}</small></div><b>{rub(x.earnings)}</b><div className="stat-line"><span>{x.workDays} рабочих дней</span><span>{x.shifts} смен</span><span>{x.tons.toFixed(2)} т</span></div></div>)}</div></> }
 
-export function Finance() { const [period,setPeriod]=useState('month'),[data,setData]=useState<FinanceData|null>(null);const load=()=>api<FinanceData>(`/finance?period=${period}`).then(setData);useEffect(()=>{load()},[period]);const editSalary=async()=>{if(!data)return;const total=prompt('Общая зарплата за выбранный период, ₽',String(data.salary));if(total===null)return;await api('/finance/salary-total',{method:'PATCH',body:JSON.stringify({period,total})});load()};return <><PeriodTabs value={period} onChange={setPeriod}/>{data&&<><section className="hero finance-hero"><span>Чистая прибыль</span><strong className={data.profit<0?'negative':''}>{rub(data.profit)}</strong><div><span>Доход {rub(data.revenue)}</span><span>Расход {rub(data.costs)}</span></div></section><h2>Доходы</h2><div className="finance-list"><Row label="Цемент" value={data.income.cement}/><Row label="Песок" value={data.income.sand}/><Row label="Щебень" value={data.income.gravel}/></div><h2>Расходы</h2><div className="finance-list"><Row label="Зарплата" value={data.salary} action={editSalary}/><Row label="Расходы предприятия" value={data.otherExpenses}/></div></>}</> }
+export function Finance() { const [period,setPeriod]=useState('month'),[data,setData]=useState<FinanceData|null>(null);const load=()=>api<FinanceData>(`/finance?period=${period}`).then(setData);useEffect(()=>{load()},[period]);const editSalary=async()=>{if(!data)return;const total=prompt('Общая зарплата за выбранный период, ₽',String(data.salary));if(total===null)return;await api('/finance/salary-total',{method:'PATCH',body:JSON.stringify({period,total})});load()};return <><PeriodTabs value={period} onChange={setPeriod}/>{data&&<><section className="hero finance-hero"><span>Чистая прибыль</span><strong className={data.profit<0?'negative':''}>{rub(data.profit)}</strong><div><span>Доход {rub(data.revenue)}</span><span>Расход {rub(data.costs)}</span></div></section><h2>Доходы</h2><div className="finance-list"><Row label="Цемент в мешках" value={data.income.cement}/><Row label="Бетон" value={data.income.concrete}/><Row label="Песок" value={data.income.sand}/><Row label="Щебень" value={data.income.gravel}/></div><h2>Расходы</h2><div className="finance-list"><Row label="Зарплата" value={data.salary} action={editSalary}/><Row label="Расходы предприятия" value={data.otherExpenses}/></div></>}</> }
 
 export function Analytics(){
   const [data,setData]=useState<AnalyticsData|null>(null);
@@ -51,7 +51,7 @@ export function Analytics(){
   if(!data)return <div className="loader">Строим графики…</div>;
   const byDay=<T extends {date:string}>(items:T[],day:string,value:(item:T)=>number)=>items.filter(x=>x.date.slice(0,10)===day).reduce((sum,item)=>sum+value(item),0);
   const labels=days.map(x=>date(x));
-  const income=days.map(day=>byDay(data.cement,day,x=>Number(x.amount))+byDay(data.materials,day,x=>Number(x.amount)));
+  const income=days.map(day=>byDay(data.cement,day,x=>Number(x.amount))+byDay(data.concrete,day,x=>Number(x.amount))+byDay(data.materials,day,x=>Number(x.amount)));
   const costs=days.map(day=>byDay(data.expenses.filter(x=>x.category!=='SALARY'),day,x=>Number(x.amount))+byDay(data.shifts,day,x=>Number(x.packagingPay)+Number(x.loadingPay)));
   const options={responsive:true,plugins:{legend:{position:'bottom' as const}},scales:{x:{grid:{display:false}},y:{beginAtZero:true}}};
   return <div className="charts">
@@ -65,6 +65,7 @@ export function Analytics(){
     ]}}/></article>
     <article><h2>Продажи</h2><Line options={options} data={{labels,datasets:[
       {label:'Цемент',data:days.map(day=>byDay(data.cement,day,x=>Number(x.amount))),borderColor:'#20241d',backgroundColor:'#20241d'},
+      {label:'Бетон',data:days.map(day=>byDay(data.concrete,day,x=>Number(x.amount))),borderColor:'#8b5cf6',backgroundColor:'#8b5cf6'},
       {label:'Песок',data:days.map(day=>byDay(data.materials.filter(x=>x.material==='SAND'),day,x=>Number(x.amount))),borderColor:'#c6a15b',backgroundColor:'#c6a15b'},
       {label:'Щебень',data:days.map(day=>byDay(data.materials.filter(x=>x.material==='GRAVEL'),day,x=>Number(x.amount))),borderColor:'#7b8587',backgroundColor:'#7b8587'}
     ]}}/></article>
