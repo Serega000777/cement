@@ -336,11 +336,13 @@ app.use((err: Error & { status?: number; code?: string }, _req: express.Request,
 const port = Number(process.env.PORT || 3000); app.listen(port, () => console.log(`API listening on ${port}`));
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
-  const webAppUrl = process.env.WEBAPP_URL;
-  bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', webAppUrl)])));
+  const webAppUrl = new URL(process.env.WEBAPP_URL);
+  webAppUrl.searchParams.set('v', '20260728-2');
+  const versionedWebAppUrl = webAppUrl.toString();
+  bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
   void (async () => {
     await bot.telegram.setMyCommands([{ command: 'start', description: 'Открыть Cement CRM' }]);
-    await bot.telegram.setChatMenuButton({ menuButton: { type: 'web_app', text: 'Открыть CRM', web_app: { url: webAppUrl } } });
+    await bot.telegram.setChatMenuButton({ menuButton: { type: 'web_app', text: 'Открыть CRM', web_app: { url: versionedWebAppUrl } } });
     await bot.launch();
     console.log('Telegram bot started');
   })().catch(error => {
