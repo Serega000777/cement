@@ -25,6 +25,13 @@ app.get('/api/auth/me', async (req, res) => {
   res.json({ id: user.id, telegramId: user.telegramId.toString(), name: user.name });
 });
 const n = (value: unknown) => Number(value || 0);
+async function usedCementTons(tx: Prisma.TransactionClient | PrismaClient, selectedBarrel: number, grade: 'M500'|'M600') {
+  const [shifts, concrete] = await Promise.all([
+    tx.shift.aggregate({ where: { barrelId: selectedBarrel, grade }, _sum: { tons: true } }),
+    tx.concreteSale.aggregate({ where: { barrelId: selectedBarrel, cementGrade: grade }, _sum: { cementTons: true } })
+  ]);
+  return n(shifts._sum.tons) + n(concrete._sum.cementTons);
+}
 
 app.get('/api/workers', async (_req, res) => res.json(await prisma.worker.findMany({ orderBy: { createdAt: 'desc' } })));
 app.post('/api/workers', async (req, res) => res.status(201).json(await prisma.worker.create({ data: { name: requiredText(req.body.name, 'Имя', 100), phone: optionalText(req.body.phone, 30), position: requiredText(req.body.position, 'Должность', 100) } })));
@@ -55,8 +62,8 @@ app.post('/api/shifts', async (req, res) => {
     const activeWorkers = await tx.worker.count({ where: { id: { in: selectedWorkers }, active: true } });
     if (activeWorkers !== selectedWorkers.length) throw new InputError('Один из выбранных работников неактивен или удалён');
     const balance = await tx.barrelOperation.aggregate({ where: { barrelId: selectedBarrel, grade, type: 'RECEIPT' }, _sum: { tons: true } });
-    const used = await tx.shift.aggregate({ where: { barrelId: selectedBarrel, grade }, _sum: { tons: true } });
-    if (n(balance._sum.tons) - n(used._sum.tons) < tons) throw new InputError(`Недостаточно цемента ${grade} в выбранной бочке`);
+    const used = await usedCementTons(tx, selectedBarrel, grade);
+    if (n(balance._sum.tons) - used < tons) throw new InputError(`Недостаточно цемента ${grade} в выбранной бочке`);
     const belarus = loadingTons > 0 ? await tx.worker.findFirst({ where: { name: { equals: 'Беларус', mode: 'insensitive' }, active: true } }) : null;
     if (loadingTons > 0 && !belarus) throw new InputError('Для начисления за сыпучку нужен активный работник «Беларус»');
     const packagingPerWorker = packagingPay / selectedWorkers.length;
@@ -105,11 +112,11 @@ app.get('/api/salary', async (req, res) => {
 app.post('/api/salary/reset', async (_req, res) => res.status(201).json(await prisma.salaryReset.create({ data: {} })));
 
 app.get('/api/barrels', async (_req, res) => {
-  const barrels = await prisma.barrel.findMany({ include: { operations: true, shifts: true } });
+  const barrels = await prisma.barrel.findMany({ include: { operations: true, shifts: true, concreteSales: true } });
   res.json(barrels.map(b => {
     const grades = Object.fromEntries(['M500', 'M600'].map(grade => {
       const received = b.operations.filter(o => o.type === 'RECEIPT' && o.grade === grade).reduce((s, o) => s + n(o.tons), 0);
-      const used = b.shifts.filter(x => x.grade === grade).reduce((s, x) => s + n(x.tons), 0);
+      const used = b.shifts.filter(x => x.grade === grade).reduce((s, x) => s + n(x.tons), 0) + b.concreteSales.filter(x => x.cementGrade === grade).reduce((s, x) => s + n(x.cementTons), 0);
       return [grade, { received, used, remaining: received - used }];
     }));
     const activeGrade = (['M500', 'M600'] as const).find(grade => grades[grade].remaining > 0.0005) ?? null;
@@ -122,11 +129,11 @@ app.post('/api/cement', async (req, res) => {
   const selectedBarrel = barrelId(req.body.barrelId);
   const grade = cementGrade(req.body.grade);
   const result = await prisma.$transaction(async tx => {
-    const [received, used] = await Promise.all([
-      tx.barrelOperation.groupBy({ by: ['grade'], where: { barrelId: selectedBarrel, type: 'RECEIPT' }, _sum: { tons: true } }),
-      tx.shift.groupBy({ by: ['grade'], where: { barrelId: selectedBarrel }, _sum: { tons: true } })
-    ]);
-    const otherGrade = (['M500', 'M600'] as const).find(item => item !== grade && n(received.find(x => x.grade === item)?._sum.tons) - n(used.find(x => x.grade === item)?._sum.tons) > 0.0005);
+    const received = await tx.barrelOperation.groupBy({ by: ['grade'], where: { barrelId: selectedBarrel, type: 'RECEIPT' }, _sum: { tons: true } });
+    const otherGrade = (await Promise.all((['M500', 'M600'] as const).filter(item => item !== grade).map(async item => ({
+      item,
+      remaining: n(received.find(x => x.grade === item)?._sum.tons) - await usedCementTons(tx, selectedBarrel, item)
+    })))).find(x => x.remaining > 0.0005)?.item;
     if (otherGrade) throw new InputError(`В бочке ещё находится цемент ${otherGrade}. Сначала израсходуйте его полностью`);
     return tx.barrelOperation.create({ data: { barrelId: selectedBarrel, grade, type: BarrelOperationType.RECEIPT, date: calendarDate(req.body.date), tons, pricePerTon: price, amount: tons * price } });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -145,24 +152,24 @@ app.patch('/api/cement/:id', async (req, res) => {
         where: { barrelId: current.barrelId, grade: current.grade },
         data: { grade }
       });
+      await tx.concreteSale.updateMany({
+        where: { barrelId: current.barrelId, cementGrade: current.grade },
+        data: { cementGrade: grade }
+      });
     }
     const affected = new Set([`${current.barrelId}:${current.grade}`, `${selectedBarrel}:${grade}`]);
     for (const key of affected) {
       const [barrel, itemGrade] = key.split(':') as [string, 'M500' | 'M600'];
       const targetBarrel = Number(barrel);
-      const [receipts, used] = await Promise.all([
-        tx.barrelOperation.aggregate({ where: { barrelId: targetBarrel, grade: itemGrade, type: 'RECEIPT', id: { not: id } }, _sum: { tons: true } }),
-        tx.shift.aggregate({ where: { barrelId: targetBarrel, grade: itemGrade }, _sum: { tons: true } })
-      ]);
+      const receipts = await tx.barrelOperation.aggregate({ where: { barrelId: targetBarrel, grade: itemGrade, type: 'RECEIPT', id: { not: id } }, _sum: { tons: true } });
+      const used = await usedCementTons(tx, targetBarrel, itemGrade);
       const editedTons = targetBarrel === selectedBarrel && itemGrade === grade ? tons : 0;
-      if (n(receipts._sum.tons) + editedTons + 0.0005 < n(used._sum.tons)) throw new InputError(`Нельзя уменьшить приход: цемент ${itemGrade} уже использован в сменах`);
+      if (n(receipts._sum.tons) + editedTons + 0.0005 < used) throw new InputError(`Нельзя уменьшить приход: цемент ${itemGrade} уже использован`);
     }
     const otherGrade = grade === 'M500' ? 'M600' : 'M500';
-    const [otherReceived, otherUsed] = await Promise.all([
-      tx.barrelOperation.aggregate({ where: { barrelId: selectedBarrel, grade: otherGrade, type: 'RECEIPT', id: { not: id } }, _sum: { tons: true } }),
-      tx.shift.aggregate({ where: { barrelId: selectedBarrel, grade: otherGrade }, _sum: { tons: true } })
-    ]);
-    if (n(otherReceived._sum.tons) - n(otherUsed._sum.tons) > 0.0005) throw new InputError(`В выбранной бочке ещё находится цемент ${otherGrade}`);
+    const otherReceived = await tx.barrelOperation.aggregate({ where: { barrelId: selectedBarrel, grade: otherGrade, type: 'RECEIPT', id: { not: id } }, _sum: { tons: true } });
+    const otherUsed = await usedCementTons(tx, selectedBarrel, otherGrade);
+    if (n(otherReceived._sum.tons) - otherUsed > 0.0005) throw new InputError(`В выбранной бочке ещё находится цемент ${otherGrade}`);
     return tx.barrelOperation.update({ where: { id }, data: { barrelId: selectedBarrel, grade, date: calendarDate(req.body.date), tons, pricePerTon: price, amount: tons * price } });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   res.json(result);
@@ -189,15 +196,30 @@ app.post('/api/concrete-sales', async (req, res) => {
   const volume = positiveNumber(req.body.volume, 'Объём бетона');
   const price = positiveNumber(req.body.pricePerM3, 'Цена за м³');
   const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
-  res.status(201).json(await prisma.concreteSale.create({ data: {
-    date: calendarDate(req.body.date),
-    concreteGrade: requiredText(req.body.concreteGrade, 'Марка бетона', 50),
-    address: requiredText(req.body.address, 'Адрес объекта', 250),
-    volume,
-    pricePerM3: price,
-    amount: volume * price,
-    paid
-  } }));
+  const concreteGrade = requiredText(req.body.concreteGrade, 'Марка бетона', 50);
+  const grade = cementGrade(req.body.cementGrade);
+  const selectedBarrel = barrelId(req.body.barrelId);
+  const result = await prisma.$transaction(async tx => {
+    const norm = await tx.concreteNorm.findFirst({ where: { name: concreteGrade, grade } });
+    if (!norm) throw new InputError(`В справочнике нет нормы ${concreteGrade} для цемента ${grade}`);
+    const cementTons = volume * n(norm.cementKgPerM3) / 1000;
+    const received = await tx.barrelOperation.aggregate({ where: { barrelId: selectedBarrel, grade, type: 'RECEIPT' }, _sum: { tons: true } });
+    const used = await usedCementTons(tx, selectedBarrel, grade);
+    if (n(received._sum.tons) - used + 0.0005 < cementTons) throw new InputError(`Недостаточно цемента ${grade} в выбранной бочке`);
+    return tx.concreteSale.create({ data: {
+      date: calendarDate(req.body.date),
+      concreteGrade,
+      address: requiredText(req.body.address, 'Адрес объекта', 250),
+      volume,
+      pricePerM3: price,
+      amount: volume * price,
+      paid,
+      cementGrade: grade,
+      barrelId: selectedBarrel,
+      cementTons
+    } });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  res.status(201).json(result);
 });
 app.patch('/api/concrete-sales/:id/paid', async (req, res) => {
   const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
@@ -253,8 +275,8 @@ app.post('/api/cash/collect', async (_req, res) => {
 });
 
 app.get('/api/concrete', async (_req, res) => res.json(await prisma.concreteNorm.findMany({ orderBy: { name: 'asc' } })));
-app.post('/api/concrete', async (req, res) => res.status(201).json(await prisma.concreteNorm.create({ data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента') } })));
-app.patch('/api/concrete/:id', async (req, res) => res.json(await prisma.concreteNorm.update({ where: { id: positiveInteger(req.params.id, 'ID нормы') }, data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента') } })));
+app.post('/api/concrete', async (req, res) => res.status(201).json(await prisma.concreteNorm.create({ data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента'), pricePerM3: positiveNumber(req.body.pricePerM3, 'Цена бетона') } })));
+app.patch('/api/concrete/:id', async (req, res) => res.json(await prisma.concreteNorm.update({ where: { id: positiveInteger(req.params.id, 'ID нормы') }, data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента'), pricePerM3: positiveNumber(req.body.pricePerM3, 'Цена бетона') } })));
 app.delete('/api/concrete/:id', async (req, res) => res.json(await prisma.concreteNorm.delete({ where: { id: positiveInteger(req.params.id, 'ID нормы') } })));
 
 app.get('/api/historical-bags', async (_req, res) => res.json(await prisma.historicalBagEntry.findMany({ orderBy: [{ date: 'desc' }, { grade: 'asc' }] })));
@@ -362,7 +384,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260729-1';
+  webAppUrl.pathname = '/app-20260729-2';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));

@@ -1,0 +1,12 @@
+ALTER TABLE "ConcreteNorm"
+ADD COLUMN "pricePerM3" DECIMAL(14,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE "ConcreteSale"
+ADD COLUMN "cementGrade" "CementGrade",
+ADD COLUMN "barrelId" INTEGER,
+ADD COLUMN "cementTons" DECIMAL(12,3) NOT NULL DEFAULT 0;
+
+ALTER TABLE "ConcreteSale"
+ADD CONSTRAINT "ConcreteSale_barrelId_fkey"
+FOREIGN KEY ("barrelId") REFERENCES "Barrel"("id")
+ON DELETE SET NULL ON UPDATE CASCADE;

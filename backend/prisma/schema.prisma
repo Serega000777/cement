@@ -79,6 +79,7 @@ model Barrel {
   name String
   operations BarrelOperation[]
   shifts Shift[]
+  concreteSales ConcreteSale[]
 }
 
 model BarrelOperation {
@@ -114,6 +115,10 @@ model ConcreteSale {
   pricePerM3 Decimal @db.Decimal(14, 2)
   amount Decimal @db.Decimal(14, 2)
   paid Boolean @default(false)
+  cementGrade CementGrade?
+  barrelId Int?
+  barrel Barrel? @relation(fields: [barrelId], references: [id])
+  cementTons Decimal @default(0) @db.Decimal(12, 3)
   createdAt DateTime @default(now())
 }
 
@@ -161,6 +166,7 @@ model ConcreteNorm {
   name String
   grade CementGrade
   cementKgPerM3 Decimal @db.Decimal(10, 2)
+  pricePerM3 Decimal @default(0) @db.Decimal(14, 2)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
