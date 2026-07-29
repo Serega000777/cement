@@ -9,7 +9,7 @@ export function calculateShift(bags: number, loadingTons: number, workerCount: n
   const tons = bags * BAG_KG / 1000;
   const packagingPay = tons * PACKAGING_RATE;
   const loadingPay = loadingTons * LOADING_RATE;
-  return { tons, packagingPay, loadingPay, totalPay: packagingPay + loadingPay, salaryPerWorker: (packagingPay + loadingPay) / workerCount };
+  return { tons, packagingPay, loadingPay, totalPay: packagingPay + loadingPay, salaryPerWorker: packagingPay / workerCount };
 }
 
 export const remainingBags = (produced: number, sold: number) => Math.max(0, produced - sold);

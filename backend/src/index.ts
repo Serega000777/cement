@@ -34,7 +34,9 @@ app.patch('/api/workers/:id', async (req, res) => res.json(await prisma.worker.u
 })));
 app.delete('/api/workers/:id', async (req, res) => res.json(await prisma.worker.update({ where: { id: positiveInteger(req.params.id, 'ID работника') }, data: { active: false } })));
 app.get('/api/workers/stats', async (req, res) => {
-  const from = startOfMoscowPeriod(req.query.period);
+  const periodFrom = startOfMoscowPeriod(req.query.period);
+  const lastReset = await prisma.salaryReset.findFirst({ orderBy: { createdAt: 'desc' } });
+  const from = lastReset && lastReset.createdAt > periodFrom ? lastReset.createdAt : periodFrom;
   const workers = await prisma.worker.findMany({ include: { shifts: { where: { shift: { date: { gte: from } } }, include: { shift: true } } }, orderBy: { name: 'asc' } });
   res.json(workers.map(worker => ({ id: worker.id, name: worker.name, position: worker.position, active: worker.active, workDays: new Set(worker.shifts.map(x => x.shift.date.toISOString().slice(0, 10))).size, shifts: worker.shifts.length, tons: worker.shifts.reduce((sum, x) => sum + n(x.shift.tons), 0), earnings: worker.shifts.reduce((sum, x) => sum + n(x.salary), 0) })));
 });
@@ -47,14 +49,20 @@ app.post('/api/shifts', async (req, res) => {
   const selectedBarrel = barrelId(req.body.barrelId);
   const grade = cementGrade(req.body.grade);
   const date = calendarDate(req.body.date);
-  const { tons, packagingPay, loadingPay, salaryPerWorker: salary } = calculateShift(bags, loadingTons, selectedWorkers.length);
+  const loadingMaterial = loadingTons > 0 ? material(req.body.loadingMaterial) : null;
+  const { tons, packagingPay, loadingPay } = calculateShift(bags, loadingTons, selectedWorkers.length);
   const result = await prisma.$transaction(async tx => {
     const activeWorkers = await tx.worker.count({ where: { id: { in: selectedWorkers }, active: true } });
     if (activeWorkers !== selectedWorkers.length) throw new InputError('Один из выбранных работников неактивен или удалён');
     const balance = await tx.barrelOperation.aggregate({ where: { barrelId: selectedBarrel, grade, type: 'RECEIPT' }, _sum: { tons: true } });
     const used = await tx.shift.aggregate({ where: { barrelId: selectedBarrel, grade }, _sum: { tons: true } });
     if (n(balance._sum.tons) - n(used._sum.tons) < tons) throw new InputError(`Недостаточно цемента ${grade} в выбранной бочке`);
-    return tx.shift.create({ data: { date, bags, tons, loadingTons, packagingPay, loadingPay, barrelId: selectedBarrel, grade, workers: { create: selectedWorkers.map(workerId => ({ workerId, salary })) } }, include: { workers: true } });
+    const belarus = loadingTons > 0 ? await tx.worker.findFirst({ where: { name: { equals: 'Беларус', mode: 'insensitive' }, active: true } }) : null;
+    if (loadingTons > 0 && !belarus) throw new InputError('Для начисления за сыпучку нужен активный работник «Беларус»');
+    const packagingPerWorker = packagingPay / selectedWorkers.length;
+    const salaryByWorker = new Map(selectedWorkers.map(workerId => [workerId, packagingPerWorker]));
+    if (belarus) salaryByWorker.set(belarus.id, (salaryByWorker.get(belarus.id) ?? 0) + loadingPay);
+    return tx.shift.create({ data: { date, bags, tons, loadingTons, loadingMaterial, packagingPay, loadingPay, barrelId: selectedBarrel, grade, workers: { create: [...salaryByWorker].map(([workerId, salary]) => ({ workerId, salary })) } }, include: { workers: true } });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   res.status(201).json(result);
 });
@@ -86,12 +94,15 @@ app.patch('/api/shifts/:id/pay', async (req, res) => {
 });
 
 app.get('/api/salary', async (req, res) => {
-  const from = req.query.from ? calendarDate(req.query.from) : startOfMoscowPeriod('month');
+  const requestedFrom = req.query.from ? calendarDate(req.query.from) : startOfMoscowPeriod('month');
+  const lastReset = await prisma.salaryReset.findFirst({ orderBy: { createdAt: 'desc' } });
+  const from = lastReset && lastReset.createdAt > requestedFrom ? lastReset.createdAt : requestedFrom;
   const rows = await prisma.shiftWorker.findMany({ where: { shift: { date: { gte: from } } }, include: { worker: true, shift: true } });
   const map = new Map<number, { worker: string; shifts: number; tons: number; salary: number }>();
   rows.forEach(r => { const v = map.get(r.workerId) || { worker: r.worker.name, shifts: 0, tons: 0, salary: 0 }; v.shifts++; v.tons += n(r.shift.tons); v.salary += n(r.salary); map.set(r.workerId, v); });
   res.json([...map.values()]);
 });
+app.post('/api/salary/reset', async (_req, res) => res.status(201).json(await prisma.salaryReset.create({ data: {} })));
 
 app.get('/api/barrels', async (_req, res) => {
   const barrels = await prisma.barrel.findMany({ include: { operations: true, shifts: true } });
@@ -177,14 +188,23 @@ app.post('/api/sales', async (req, res) => {
 app.post('/api/concrete-sales', async (req, res) => {
   const volume = positiveNumber(req.body.volume, 'Объём бетона');
   const price = positiveNumber(req.body.pricePerM3, 'Цена за м³');
+  const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
   res.status(201).json(await prisma.concreteSale.create({ data: {
     date: calendarDate(req.body.date),
     concreteGrade: requiredText(req.body.concreteGrade, 'Марка бетона', 50),
     address: requiredText(req.body.address, 'Адрес объекта', 250),
     volume,
     pricePerM3: price,
-    amount: volume * price
+    amount: volume * price,
+    paid
   } }));
+});
+app.patch('/api/concrete-sales/:id/paid', async (req, res) => {
+  const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
+  res.json(await prisma.concreteSale.update({
+    where: { id: positiveInteger(req.params.id, 'ID продажи бетона') },
+    data: { paid, ...(paid ? { createdAt: new Date() } : {}) }
+  }));
 });
 app.post('/api/materials', async (req, res) => {
   const tons = positiveNumber(req.body.tons, 'Количество тонн');
@@ -211,7 +231,7 @@ async function cashBalance(tx: Prisma.TransactionClient | PrismaClient) {
   const operationWhere = last ? { createdAt: { gt: last.createdAt } } : { date: { gte: cashStart } };
   const [cement, concrete, expenses, shifts, adjustments] = await Promise.all([
     tx.cementSale.aggregate({ where: operationWhere, _sum: { amount: true } }),
-    tx.concreteSale.aggregate({ where: operationWhere, _sum: { amount: true } }),
+    tx.concreteSale.aggregate({ where: { ...operationWhere, paid: true }, _sum: { amount: true } }),
     tx.expense.aggregate({ where: { ...operationWhere, category: { not: 'SALARY' } }, _sum: { amount: true } }),
     tx.shift.aggregate({ where: operationWhere, _sum: { packagingPay: true, loadingPay: true } }),
     tx.cashAdjustment.findMany({ where: operationWhere })
@@ -272,14 +292,16 @@ app.get('/api/dashboard', async (_req, res) => {
     prisma.expense.aggregate({ where: { date: { gte: today }, category: { not: 'SALARY' } }, _sum: { amount: true } }),
     prisma.shift.groupBy({ by: ['grade'], _sum: { bags: true } }), prisma.cementSale.groupBy({ by: ['grade'], _sum: { bags: true } }),
     prisma.historicalBagEntry.groupBy({ by: ['grade'], _sum: { producedBags: true, soldBags: true } })]);
-  const salary = shifts.reduce((s, x) => s + n(x.packagingPay) + n(x.loadingPay), 0), revenue = n(cement._sum.amount) + n(concrete._sum.amount), costs = n(expenses._sum.amount) + salary;
+  const paidConcrete = await prisma.concreteSale.aggregate({ where: { date: { gte: today }, paid: true }, _sum: { amount: true } });
+  const salary = shifts.reduce((s, x) => s + n(x.packagingPay) + n(x.loadingPay), 0), revenue = n(cement._sum.amount) + n(paidConcrete._sum.amount), costs = n(expenses._sum.amount) + salary;
   const monthRevenue = await prisma.cementSale.aggregate({ where: { date: { gte: month } }, _sum: { amount: true } });
   const grades = Object.fromEntries(['M500', 'M600'].map(grade => {
     const produced = n(allMade.find(x => x.grade === grade)?._sum.bags) + n(historical.find(x => x.grade === grade)?._sum.producedBags);
     const sold = n(allSold.find(x => x.grade === grade)?._sum.bags) + n(historical.find(x => x.grade === grade)?._sum.soldBags);
     return [grade, { produced, sold, remaining: produced - sold }];
   }));
-  res.json({ production: { bags: shifts.reduce((s, x) => s + x.bags, 0), tons: shifts.reduce((s, x) => s + n(x.tons), 0) }, workers: new Set(shifts.flatMap(x => x.workers.map(w => w.workerId))).size, salary, sales: { cement: n(cement._sum.amount), concrete: n(concrete._sum.amount), sand: n(materials.find(x => x.material === 'SAND')?._sum.amount), gravel: n(materials.find(x => x.material === 'GRAVEL')?._sum.amount) }, expenses: n(expenses._sum.amount), finance: { revenue, costs, profit: revenue - costs }, cash: await cashBalance(prisma), stock: { bags: Object.values(grades).reduce((s, x) => s + x.remaining, 0), produced: Object.values(grades).reduce((s, x) => s + x.produced, 0), sold: Object.values(grades).reduce((s, x) => s + x.sold, 0), grades, monthRevenue: n(monthRevenue._sum.amount) } });
+  const bulk = { sand: shifts.filter(x => x.loadingMaterial === 'SAND').reduce((s, x) => s + n(x.loadingTons), 0), gravel: shifts.filter(x => x.loadingMaterial === 'GRAVEL').reduce((s, x) => s + n(x.loadingTons), 0) };
+  res.json({ production: { bags: shifts.reduce((s, x) => s + x.bags, 0), tons: shifts.reduce((s, x) => s + n(x.tons), 0), concreteM3: n(concrete._sum.volume), bulk }, workers: new Set(shifts.flatMap(x => x.workers.map(w => w.workerId))).size, salary, sales: { cement: n(cement._sum.amount), concrete: n(paidConcrete._sum.amount), sand: n(materials.find(x => x.material === 'SAND')?._sum.amount), gravel: n(materials.find(x => x.material === 'GRAVEL')?._sum.amount) }, expenses: n(expenses._sum.amount), finance: { revenue, costs, profit: revenue - costs }, cash: await cashBalance(prisma), stock: { bags: Object.values(grades).reduce((s, x) => s + x.remaining, 0), produced: Object.values(grades).reduce((s, x) => s + x.produced, 0), sold: Object.values(grades).reduce((s, x) => s + x.sold, 0), grades, monthRevenue: n(monthRevenue._sum.amount) } });
 });
 
 app.get('/api/analytics', async (_req, res) => {
@@ -295,13 +317,16 @@ app.get('/api/analytics', async (_req, res) => {
   res.json({ shifts, cement, concrete, materials, expenses, historicalBags });
 });
 app.get('/api/finance', async (req, res) => {
-  const from = startOfMoscowPeriod(req.query.period);
+  const periodFrom = startOfMoscowPeriod(req.query.period);
+  const lastCollection = await prisma.cashCollection.findFirst({ orderBy: { createdAt: 'desc' } });
+  const afterCollection = Boolean(lastCollection && lastCollection.createdAt > periodFrom);
+  const operationWhere = afterCollection ? { createdAt: { gt: lastCollection!.createdAt } } : { date: { gte: periodFrom } };
   const [cement, concrete, expenses, shifts, adjustments] = await Promise.all([
-    prisma.cementSale.aggregate({ where: { date: { gte: from } }, _sum: { amount: true } }),
-    prisma.concreteSale.aggregate({ where: { date: { gte: from } }, _sum: { amount: true } }),
-    prisma.expense.groupBy({ by: ['category'], where: { date: { gte: from }, category: { not: 'SALARY' } }, _sum: { amount: true } }),
-    prisma.shift.aggregate({ where: { date: { gte: from } }, _sum: { packagingPay: true, loadingPay: true } }),
-    prisma.cashAdjustment.findMany({ where: { date: { gte: from } } })
+    prisma.cementSale.aggregate({ where: operationWhere, _sum: { amount: true } }),
+    prisma.concreteSale.aggregate({ where: { ...operationWhere, paid: true }, _sum: { amount: true } }),
+    prisma.expense.groupBy({ by: ['category'], where: { ...operationWhere, category: { not: 'SALARY' } }, _sum: { amount: true } }),
+    prisma.shift.aggregate({ where: operationWhere, _sum: { packagingPay: true, loadingPay: true } }),
+    prisma.cashAdjustment.findMany({ where: operationWhere })
   ]);
   const incomeAdjustment = adjustments.filter(x => n(x.amount) > 0).reduce((sum, x) => sum + n(x.amount), 0);
   const expenseAdjustment = adjustments.filter(x => n(x.amount) < 0).reduce((sum, x) => sum + Math.abs(n(x.amount)), 0);

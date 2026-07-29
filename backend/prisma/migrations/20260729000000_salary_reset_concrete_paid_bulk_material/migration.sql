@@ -1,0 +1,10 @@
+ALTER TABLE "Shift"
+ADD COLUMN "loadingMaterial" "Material";
+
+ALTER TABLE "ConcreteSale"
+ADD COLUMN "paid" BOOLEAN NOT NULL DEFAULT false;
+
+CREATE TABLE "SalaryReset" (
+  "id" SERIAL PRIMARY KEY,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

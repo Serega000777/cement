@@ -55,6 +55,7 @@ model Shift {
   bags Int
   tons Decimal @db.Decimal(12, 3)
   loadingTons Decimal @default(0) @db.Decimal(12, 3)
+  loadingMaterial Material?
   packagingPay Decimal @db.Decimal(14, 2)
   loadingPay Decimal @db.Decimal(14, 2)
   barrelId Int
@@ -112,6 +113,7 @@ model ConcreteSale {
   volume Decimal @db.Decimal(12, 3)
   pricePerM3 Decimal @db.Decimal(14, 2)
   amount Decimal @db.Decimal(14, 2)
+  paid Boolean @default(false)
   createdAt DateTime @default(now())
 }
 
@@ -146,6 +148,11 @@ model CashAdjustment {
   date DateTime
   amount Decimal @db.Decimal(14, 2)
   note String
+  createdAt DateTime @default(now())
+}
+
+model SalaryReset {
+  id Int @id @default(autoincrement())
   createdAt DateTime @default(now())
 }
 
