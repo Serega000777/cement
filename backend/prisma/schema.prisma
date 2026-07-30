@@ -14,6 +14,7 @@ enum Material {
 
 enum ExpenseCategory {
   SALARY
+  BULK_SALARY
   RENT
   ELECTRICITY
   FUEL
@@ -131,6 +132,7 @@ model MaterialSale {
   pricePerTon Decimal @db.Decimal(14, 2)
   amount Decimal @db.Decimal(14, 2)
   includeInFinance Boolean @default(false)
+  loadingSalaryExpense Expense?
   createdAt DateTime @default(now())
 }
 
@@ -140,6 +142,8 @@ model Expense {
   category ExpenseCategory
   amount Decimal @db.Decimal(14, 2)
   comment String?
+  materialSaleId Int? @unique
+  materialSale MaterialSale? @relation(fields: [materialSaleId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 }
 

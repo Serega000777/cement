@@ -76,4 +76,4 @@ export function Analytics(){
     ]}}/></article>
   </div>
 }
-function Row({label,value,action}:{label:string;value:number;action?:()=>void}){return <div><span>{label}</span><strong>{rub(value)}</strong>{action&&<button className="icon-button" onClick={action} title="Изменить"><Pencil/></button>}</div>};function Empty(){return <div className="empty"><BarChart3/>Записей пока нет</div>}function category(key:string){return ({SALARY:'Зарплата',RENT:'Аренда',ELECTRICITY:'Электричество',FUEL:'Топливо',REPAIR:'Ремонт',PACKAGING:'Упаковка',OTHER:'Прочее'} as Record<string,string>)[key]||key}
+function Row({label,value,action}:{label:string;value:number;action?:()=>void}){return <div><span>{label}</span><strong>{rub(value)}</strong>{action&&<button className="icon-button" onClick={action} title="Изменить"><Pencil/></button>}</div>};function Empty(){return <div className="empty"><BarChart3/>Записей пока нет</div>}function category(key:string){return ({SALARY:'Зарплата',BULK_SALARY:'Зарплата за сыпучку',RENT:'Аренда',ELECTRICITY:'Электричество',FUEL:'Топливо',REPAIR:'Ремонт',PACKAGING:'Упаковка',OTHER:'Прочее'} as Record<string,string>)[key]||key}

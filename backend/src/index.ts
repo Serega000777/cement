@@ -275,7 +275,21 @@ app.patch('/api/concrete-sales/:id/paid', async (req, res) => {
 app.post('/api/materials', async (req, res) => {
   const tons = positiveNumber(req.body.tons, 'Количество тонн');
   const price = positiveNumber(req.body.pricePerTon, 'Цена за тонну');
-  res.status(201).json(await prisma.materialSale.create({ data: { date: calendarDate(req.body.date), material: material(req.body.material), tons, pricePerTon: price, amount: tons * price, includeInFinance: false } }));
+  const date = calendarDate(req.body.date), selectedMaterial = material(req.body.material);
+  const result = await prisma.$transaction(async tx => {
+    const sale = await tx.materialSale.create({ data: { date, material: selectedMaterial, tons, pricePerTon: price, amount: tons * price, includeInFinance: false } });
+    await tx.expense.create({
+      data: {
+        date,
+        category: 'BULK_SALARY',
+        amount: tons * 100,
+        comment: `Зарплата Беларусу за погрузку ${selectedMaterial === 'SAND' ? 'песка' : 'щебня'}: ${tons} т × 100 ₽`,
+        materialSaleId: sale.id
+      }
+    });
+    return sale;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  res.status(201).json(result);
 });
 app.get('/api/materials', async (req, res) => {
   const from = startOfMoscowPeriod(req.query.period);
@@ -351,15 +365,16 @@ app.get('/api/dashboard/details', async (_req, res) => {
 
 app.get('/api/dashboard', async (_req, res) => {
   const today = startOfMoscowPeriod('day'), month = startOfMoscowPeriod('month');
-  const [shifts, cement, concrete, materials, expenses, allMade, allSold, historical] = await Promise.all([
+  const [shifts, cement, concrete, materials, expenses, bulkSalary, allMade, allSold, historical] = await Promise.all([
     prisma.shift.findMany({ where: { date: { gte: today } }, include: { workers: true } }), prisma.cementSale.aggregate({ where: { date: { gte: today } }, _sum: { amount: true, bags: true } }),
     prisma.concreteSale.aggregate({ where: { date: { gte: today } }, _sum: { amount: true, volume: true } }),
     prisma.materialSale.groupBy({ by: ['material'], where: { date: { gte: today } }, _sum: { amount: true, tons: true } }),
-    prisma.expense.aggregate({ where: { date: { gte: today }, category: { not: 'SALARY' } }, _sum: { amount: true } }),
+    prisma.expense.aggregate({ where: { date: { gte: today }, category: { notIn: ['SALARY', 'BULK_SALARY'] } }, _sum: { amount: true } }),
+    prisma.expense.aggregate({ where: { date: { gte: today }, category: 'BULK_SALARY' }, _sum: { amount: true } }),
     prisma.shift.groupBy({ by: ['grade'], _sum: { bags: true } }), prisma.cementSale.groupBy({ by: ['grade'], _sum: { bags: true } }),
     prisma.historicalBagEntry.groupBy({ by: ['grade'], _sum: { producedBags: true, soldBags: true } })]);
   const paidConcrete = await prisma.concreteSale.aggregate({ where: { date: { gte: today }, paid: true }, _sum: { amount: true } });
-  const salary = shifts.reduce((s, x) => s + n(x.packagingPay) + n(x.loadingPay), 0), revenue = n(cement._sum.amount) + n(paidConcrete._sum.amount), costs = n(expenses._sum.amount) + salary;
+  const salary = shifts.reduce((s, x) => s + n(x.packagingPay) + n(x.loadingPay), 0) + n(bulkSalary._sum.amount), revenue = n(cement._sum.amount) + n(paidConcrete._sum.amount), costs = n(expenses._sum.amount) + salary;
   const monthRevenue = await prisma.cementSale.aggregate({ where: { date: { gte: month } }, _sum: { amount: true } });
   const grades = Object.fromEntries(['M500', 'M600'].map(grade => {
     const produced = n(allMade.find(x => x.grade === grade)?._sum.bags) + n(historical.find(x => x.grade === grade)?._sum.producedBags);
@@ -387,17 +402,18 @@ app.get('/api/finance', async (req, res) => {
   const lastCollection = await prisma.cashCollection.findFirst({ orderBy: { createdAt: 'desc' } });
   const afterCollection = Boolean(lastCollection && lastCollection.createdAt > periodFrom);
   const operationWhere = afterCollection ? { createdAt: { gt: lastCollection!.createdAt } } : { date: { gte: periodFrom } };
-  const [cement, concrete, expenses, shifts, adjustments] = await Promise.all([
+  const [cement, concrete, expenses, bulkSalary, shifts, adjustments] = await Promise.all([
     prisma.cementSale.aggregate({ where: operationWhere, _sum: { amount: true } }),
     prisma.concreteSale.aggregate({ where: { ...operationWhere, paid: true }, _sum: { amount: true } }),
-    prisma.expense.groupBy({ by: ['category'], where: { ...operationWhere, category: { not: 'SALARY' } }, _sum: { amount: true } }),
+    prisma.expense.groupBy({ by: ['category'], where: { ...operationWhere, category: { notIn: ['SALARY', 'BULK_SALARY'] } }, _sum: { amount: true } }),
+    prisma.expense.aggregate({ where: { ...operationWhere, category: 'BULK_SALARY' }, _sum: { amount: true } }),
     prisma.shift.aggregate({ where: operationWhere, _sum: { packagingPay: true, loadingPay: true } }),
     prisma.cashAdjustment.findMany({ where: operationWhere })
   ]);
   const incomeAdjustment = adjustments.filter(x => n(x.amount) > 0).reduce((sum, x) => sum + n(x.amount), 0);
   const expenseAdjustment = adjustments.filter(x => n(x.amount) < 0).reduce((sum, x) => sum + Math.abs(n(x.amount)), 0);
   const income = { cement: n(cement._sum.amount) + incomeAdjustment, concrete: n(concrete._sum.amount), sand: 0, gravel: 0 };
-  const salary = n(shifts._sum.packagingPay) + n(shifts._sum.loadingPay), otherExpenses = expenses.reduce((sum, x) => sum + n(x._sum.amount), 0) + expenseAdjustment;
+  const salary = n(shifts._sum.packagingPay) + n(shifts._sum.loadingPay) + n(bulkSalary._sum.amount), otherExpenses = expenses.reduce((sum, x) => sum + n(x._sum.amount), 0) + expenseAdjustment;
   const revenue = income.cement + income.concrete + income.sand + income.gravel, costs = salary + otherExpenses;
   res.json({ period: req.query.period || 'month', income, salary, otherExpenses, revenue, costs, profit: revenue - costs, expenseBreakdown: expenses });
 });
@@ -428,7 +444,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260730-3';
+  webAppUrl.pathname = '/app-20260730-4';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
