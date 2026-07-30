@@ -222,6 +222,49 @@ app.post('/api/concrete-sales', async (req, res) => {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   res.status(201).json(result);
 });
+app.patch('/api/concrete-sales/:id', async (req, res) => {
+  const id = positiveInteger(req.params.id, 'ID продажи бетона');
+  const volume = positiveNumber(req.body.volume, 'Объём бетона');
+  const price = positiveNumber(req.body.pricePerM3, 'Цена за м³');
+  const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
+  const concreteGrade = requiredText(req.body.concreteGrade, 'Марка бетона', 50);
+  const grade = cementGrade(req.body.cementGrade);
+  const selectedBarrel = barrelId(req.body.barrelId);
+  const result = await prisma.$transaction(async tx => {
+    const current = await tx.concreteSale.findUniqueOrThrow({ where: { id } });
+    const norm = await tx.concreteNorm.findFirst({ where: { name: concreteGrade, grade } });
+    if (!norm) throw new InputError(`В справочнике нет нормы ${concreteGrade} для цемента ${grade}`);
+    const cementTons = volume * n(norm.cementKgPerM3) / 1000;
+    const received = await tx.barrelOperation.aggregate({
+      where: { barrelId: selectedBarrel, grade, type: 'RECEIPT' },
+      _sum: { tons: true }
+    });
+    const used = await usedCementTons(tx, selectedBarrel, grade);
+    const currentUsage = current.barrelId === selectedBarrel && current.cementGrade === grade
+      ? n(current.cementTons)
+      : 0;
+    if (n(received._sum.tons) - used + currentUsage + 0.0005 < cementTons) {
+      throw new InputError(`Недостаточно цемента ${grade} в выбранной бочке`);
+    }
+    return tx.concreteSale.update({
+      where: { id },
+      data: {
+        date: calendarDate(req.body.date),
+        concreteGrade,
+        address: requiredText(req.body.address, 'Адрес объекта', 250),
+        vehicle: requiredText(req.body.vehicle, 'Автомобиль', 150),
+        volume,
+        pricePerM3: price,
+        amount: volume * price,
+        paid,
+        cementGrade: grade,
+        barrelId: selectedBarrel,
+        cementTons
+      }
+    });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  res.json(result);
+});
 app.patch('/api/concrete-sales/:id/paid', async (req, res) => {
   const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
   res.json(await prisma.concreteSale.update({
@@ -385,7 +428,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260730-2';
+  webAppUrl.pathname = '/app-20260730-3';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
