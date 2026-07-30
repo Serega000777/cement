@@ -111,6 +111,7 @@ model ConcreteSale {
   date DateTime
   concreteGrade String
   address String
+  vehicle String @default("Не указано")
   volume Decimal @db.Decimal(12, 3)
   pricePerM3 Decimal @db.Decimal(14, 2)
   amount Decimal @db.Decimal(14, 2)

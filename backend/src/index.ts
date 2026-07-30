@@ -210,6 +210,7 @@ app.post('/api/concrete-sales', async (req, res) => {
       date: calendarDate(req.body.date),
       concreteGrade,
       address: requiredText(req.body.address, 'Адрес объекта', 250),
+      vehicle: requiredText(req.body.vehicle, 'Автомобиль', 150),
       volume,
       pricePerM3: price,
       amount: volume * price,
@@ -384,7 +385,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260730-1';
+  webAppUrl.pathname = '/app-20260730-2';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
