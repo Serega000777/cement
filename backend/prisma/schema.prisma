@@ -15,6 +15,7 @@ enum Material {
 enum ExpenseCategory {
   SALARY
   BULK_SALARY
+  WATER
   RENT
   ELECTRICITY
   FUEL

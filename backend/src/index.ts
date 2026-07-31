@@ -192,6 +192,34 @@ app.post('/api/sales', async (req, res) => {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   res.status(201).json(result);
 });
+app.patch('/api/sales/:id', async (req, res) => {
+  const id = positiveInteger(req.params.id, 'ID продажи');
+  const bags = positiveInteger(req.body.bags, 'Количество мешков');
+  const price = positiveNumber(req.body.pricePerBag, 'Цена за мешок');
+  const grade = cementGrade(req.body.grade);
+  const result = await prisma.$transaction(async tx => {
+    await tx.cementSale.findUniqueOrThrow({ where: { id } });
+    const [made, sold, historical] = await Promise.all([
+      tx.shift.aggregate({ where: { grade }, _sum: { bags: true } }),
+      tx.cementSale.aggregate({ where: { grade, id: { not: id } }, _sum: { bags: true } }),
+      tx.historicalBagEntry.aggregate({ where: { grade }, _sum: { producedBags: true, soldBags: true } })
+    ]);
+    const available = n(made._sum.bags) + n(historical._sum.producedBags) - n(sold._sum.bags) - n(historical._sum.soldBags);
+    if (available < bags) throw new InputError(`Недостаточно мешков ${grade}. Доступно: ${Math.max(0, available)}`);
+    return tx.cementSale.update({
+      where: { id },
+      data: {
+        date: calendarDate(req.body.date),
+        client: optionalText(req.body.client, 150) ?? 'Без клиента',
+        grade,
+        bags,
+        pricePerBag: price,
+        amount: bags * price
+      }
+    });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  res.json(result);
+});
 app.post('/api/concrete-sales', async (req, res) => {
   const volume = positiveNumber(req.body.volume, 'Объём бетона');
   const price = positiveNumber(req.body.pricePerM3, 'Цена за м³');
@@ -365,6 +393,36 @@ app.get('/api/concrete', async (_req, res) => res.json(await prisma.concreteNorm
 app.post('/api/concrete', async (req, res) => res.status(201).json(await prisma.concreteNorm.create({ data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента'), pricePerM3: positiveNumber(req.body.pricePerM3, 'Цена бетона') } })));
 app.patch('/api/concrete/:id', async (req, res) => res.json(await prisma.concreteNorm.update({ where: { id: positiveInteger(req.params.id, 'ID нормы') }, data: { name: requiredText(req.body.name, 'Марка бетона', 100), grade: cementGrade(req.body.grade), cementKgPerM3: positiveNumber(req.body.cementKgPerM3, 'Норма цемента'), pricePerM3: positiveNumber(req.body.pricePerM3, 'Цена бетона') } })));
 app.delete('/api/concrete/:id', async (req, res) => res.json(await prisma.concreteNorm.delete({ where: { id: positiveInteger(req.params.id, 'ID нормы') } })));
+app.get('/api/concrete-analytics', async (req, res) => {
+  let from: Date, to: Date | undefined;
+  if (req.query.period === 'custom') {
+    from = calendarDate(req.query.from);
+    to = calendarDate(req.query.to);
+    if (to < from) throw new InputError('Дата окончания должна быть не раньше даты начала');
+  } else {
+    from = startOfMoscowPeriod(req.query.period);
+  }
+  const sales = await prisma.concreteSale.findMany({
+    where: { date: { gte: from, ...(to ? { lte: to } : {}) } },
+    orderBy: { date: 'asc' }
+  });
+  const byGrade = Object.values(sales.reduce<Record<string, { grade: string; volume: number; shipments: number; amount: number }>>((result, sale) => {
+    const item = result[sale.concreteGrade] ?? { grade: sale.concreteGrade, volume: 0, shipments: 0, amount: 0 };
+    item.volume += n(sale.volume);
+    item.shipments += 1;
+    item.amount += n(sale.amount);
+    result[sale.concreteGrade] = item;
+    return result;
+  }, {})).sort((a, b) => a.grade.localeCompare(b.grade, 'ru'));
+  res.json({
+    from,
+    to: to ?? new Date(),
+    totalVolume: sales.reduce((sum, sale) => sum + n(sale.volume), 0),
+    shipments: sales.length,
+    byGrade,
+    sales
+  });
+});
 
 app.get('/api/historical-bags', async (_req, res) => res.json(await prisma.historicalBagEntry.findMany({ orderBy: [{ date: 'desc' }, { grade: 'asc' }] })));
 app.post('/api/historical-bags', async (req, res) => {
@@ -473,7 +531,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260731-1';
+  webAppUrl.pathname = '/app-20260731-2';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
