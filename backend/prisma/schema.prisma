@@ -16,6 +16,7 @@ enum ExpenseCategory {
   SALARY
   BULK_SALARY
   WATER
+  DELIVERY
   RENT
   ELECTRICITY
   FUEL
@@ -145,6 +146,15 @@ model Expense {
   comment String?
   materialSaleId Int? @unique
   materialSale MaterialSale? @relation(fields: [materialSaleId], references: [id], onDelete: Cascade)
+  customCategoryId Int?
+  customCategory ExpenseCategoryOption? @relation(fields: [customCategoryId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+}
+
+model ExpenseCategoryOption {
+  id Int @id @default(autoincrement())
+  name String @unique
+  expenses Expense[]
   createdAt DateTime @default(now())
 }
 
@@ -152,6 +162,20 @@ model CashCollection {
   id Int @id @default(autoincrement())
   amount Decimal @db.Decimal(14, 2)
   createdAt DateTime @default(now())
+}
+
+model DanilovaReceipt {
+  id Int @id @default(autoincrement())
+  date DateTime
+  vehicle String
+  destination String
+  concreteGrade String
+  volume Decimal @db.Decimal(12, 3)
+  pricePerM3 Decimal @db.Decimal(14, 2)
+  amount Decimal @db.Decimal(14, 2)
+  paid Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model CashAdjustment {
