@@ -296,6 +296,35 @@ app.get('/api/materials', async (req, res) => {
   const rows = await prisma.materialSale.groupBy({ by: ['material'], where: { date: { gte: from } }, _sum: { tons: true, amount: true } });
   res.json({ sand: { tons: n(rows.find(x => x.material === 'SAND')?._sum.tons), amount: n(rows.find(x => x.material === 'SAND')?._sum.amount) }, gravel: { tons: n(rows.find(x => x.material === 'GRAVEL')?._sum.tons), amount: n(rows.find(x => x.material === 'GRAVEL')?._sum.amount) } });
 });
+app.patch('/api/materials/:id', async (req, res) => {
+  const id = positiveInteger(req.params.id, 'ID продажи');
+  const tons = positiveNumber(req.body.tons, 'Количество тонн');
+  const price = positiveNumber(req.body.pricePerTon, 'Цена за тонну');
+  const date = calendarDate(req.body.date), selectedMaterial = material(req.body.material);
+  const result = await prisma.$transaction(async tx => {
+    const sale = await tx.materialSale.update({
+      where: { id },
+      data: { date, material: selectedMaterial, tons, pricePerTon: price, amount: tons * price }
+    });
+    await tx.expense.upsert({
+      where: { materialSaleId: id },
+      update: {
+        date,
+        amount: tons * 100,
+        comment: `Зарплата Беларусу за погрузку ${selectedMaterial === 'SAND' ? 'песка' : 'щебня'}: ${tons} т × 100 ₽`
+      },
+      create: {
+        date,
+        category: 'BULK_SALARY',
+        amount: tons * 100,
+        comment: `Зарплата Беларусу за погрузку ${selectedMaterial === 'SAND' ? 'песка' : 'щебня'}: ${tons} т × 100 ₽`,
+        materialSaleId: id
+      }
+    });
+    return sale;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  res.json(result);
+});
 app.delete('/api/sales/:id', async (req, res) => res.json(await prisma.cementSale.delete({ where: { id: positiveInteger(req.params.id, 'ID продажи') } })));
 app.delete('/api/materials/:id', async (req, res) => res.json(await prisma.materialSale.delete({ where: { id: positiveInteger(req.params.id, 'ID продажи') } })));
 app.delete('/api/concrete-sales/:id', async (req, res) => res.json(await prisma.concreteSale.delete({ where: { id: positiveInteger(req.params.id, 'ID продажи бетона') } })));
@@ -444,7 +473,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260730-4';
+  webAppUrl.pathname = '/app-20260731-1';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
