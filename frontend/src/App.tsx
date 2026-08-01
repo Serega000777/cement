@@ -111,7 +111,7 @@ type CashData={balance:number;income:number;costs:number;since:string|null;colle
 type DanilovaRow={id:number;date:string;vehicle:string;destination:string;concreteGrade:string;volume:number;pricePerM3:number;amount:number;paid:boolean};
 function Danilova({done}:{done:()=>void}){
  const [rows,setRows]=useState<DanilovaRow[]>([]),[error,setError]=useState(''),[open,setOpen]=useState(false),[editing,setEditing]=useState<DanilovaRow|null>(null),[volume,setVolume]=useState(0),[price,setPrice]=useState(0);
- const load=()=>api<DanilovaRow[]>('/danilova').then(setRows).catch(e=>setError(e.message));useEffect(()=>{load()},[]);
+ const load=()=>api<DanilovaRow[]>('/danilova').then(setRows).catch(e=>setError(e.message));useEffect(()=>{document.body.style.overflowY='auto';document.documentElement.style.overflowY='auto';window.scrollTo(0,0);document.body.scrollTop=0;document.documentElement.scrollTop=0;load();return()=>{document.body.style.overflowY='';document.documentElement.style.overflowY=''}},[]);
  const close=()=>{setOpen(false);setEditing(null);setVolume(0);setPrice(0)};
  const save=async(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();try{const body=JSON.stringify(Object.fromEntries(new FormData(e.currentTarget)));await api(editing?`/danilova/${editing.id}`:'/danilova',{method:editing?'PATCH':'POST',body});close();load();done()}catch(x){setError((x as Error).message)}};
  const toggle=async(x:DanilovaRow)=>{await api(`/danilova/${x.id}/paid`,{method:'PATCH',body:JSON.stringify({paid:!x.paid})});load();done()};
