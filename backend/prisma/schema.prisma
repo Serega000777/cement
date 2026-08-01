@@ -119,6 +119,7 @@ model ConcreteSale {
   pricePerM3 Decimal @db.Decimal(14, 2)
   amount Decimal @db.Decimal(14, 2)
   paid Boolean @default(false)
+  moneyAtDanilova Boolean @default(false)
   cementGrade CementGrade?
   barrelId Int?
   barrel Barrel? @relation(fields: [barrelId], references: [id])

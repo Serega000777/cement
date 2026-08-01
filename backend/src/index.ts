@@ -223,7 +223,8 @@ app.patch('/api/sales/:id', async (req, res) => {
 app.post('/api/concrete-sales', async (req, res) => {
   const volume = positiveNumber(req.body.volume, 'Объём бетона');
   const price = positiveNumber(req.body.pricePerM3, 'Цена за м³');
-  const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
+  const moneyAtDanilova = req.body.moneyAtDanilova === true || req.body.moneyAtDanilova === 'true' || req.body.moneyAtDanilova === 'on';
+  const paid = !moneyAtDanilova && (req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on');
   const concreteGrade = requiredText(req.body.concreteGrade, 'Марка бетона', 50);
   const grade = cementGrade(req.body.cementGrade);
   const selectedBarrel = barrelId(req.body.barrelId);
@@ -243,6 +244,7 @@ app.post('/api/concrete-sales', async (req, res) => {
       pricePerM3: price,
       amount: volume * price,
       paid,
+      moneyAtDanilova,
       cementGrade: grade,
       barrelId: selectedBarrel,
       cementTons
@@ -254,7 +256,8 @@ app.patch('/api/concrete-sales/:id', async (req, res) => {
   const id = positiveInteger(req.params.id, 'ID продажи бетона');
   const volume = positiveNumber(req.body.volume, 'Объём бетона');
   const price = positiveNumber(req.body.pricePerM3, 'Цена за м³');
-  const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
+  const moneyAtDanilova = req.body.moneyAtDanilova === true || req.body.moneyAtDanilova === 'true' || req.body.moneyAtDanilova === 'on';
+  const paid = !moneyAtDanilova && (req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on');
   const concreteGrade = requiredText(req.body.concreteGrade, 'Марка бетона', 50);
   const grade = cementGrade(req.body.cementGrade);
   const selectedBarrel = barrelId(req.body.barrelId);
@@ -285,6 +288,8 @@ app.patch('/api/concrete-sales/:id', async (req, res) => {
         pricePerM3: price,
         amount: volume * price,
         paid,
+        moneyAtDanilova,
+        ...(!current.paid && paid ? { createdAt: new Date() } : {}),
         cementGrade: grade,
         barrelId: selectedBarrel,
         cementTons
@@ -297,8 +302,12 @@ app.patch('/api/concrete-sales/:id/paid', async (req, res) => {
   const paid = req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on';
   res.json(await prisma.concreteSale.update({
     where: { id: positiveInteger(req.params.id, 'ID продажи бетона') },
-    data: { paid, ...(paid ? { createdAt: new Date() } : {}) }
+    data: { paid, moneyAtDanilova: false, ...(paid ? { createdAt: new Date() } : {}) }
   }));
+});
+app.patch('/api/concrete-sales/:id/danilova', async (req, res) => {
+  const moneyAtDanilova = req.body.moneyAtDanilova === true || req.body.moneyAtDanilova === 'true' || req.body.moneyAtDanilova === 'on';
+  res.json(await prisma.concreteSale.update({ where: { id: positiveInteger(req.params.id, 'ID продажи бетона') }, data: { moneyAtDanilova, paid: false } }));
 });
 app.post('/api/materials', async (req, res) => {
   const tons = positiveNumber(req.body.tons, 'Количество тонн');
@@ -615,7 +624,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260801-3';
+  webAppUrl.pathname = '/app-20260801-4';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
