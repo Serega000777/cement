@@ -463,6 +463,47 @@ app.get('/api/concrete-analytics', async (req, res) => {
   });
 });
 
+app.get('/api/equipment/vehicles', async (_req, res) => res.json(await prisma.equipmentVehicle.findMany({ orderBy: { name: 'asc' } })));
+app.post('/api/equipment/vehicles', async (req, res) => res.status(201).json(await prisma.equipmentVehicle.create({ data: { name: requiredText(req.body.name, 'Название техники', 100), note: optionalText(req.body.note, 250) } })));
+app.patch('/api/equipment/vehicles/:id', async (req, res) => res.json(await prisma.equipmentVehicle.update({ where: { id: positiveInteger(req.params.id, 'ID техники') }, data: { name: requiredText(req.body.name, 'Название техники', 100), note: optionalText(req.body.note, 250) } })));
+app.delete('/api/equipment/vehicles/:id', async (req, res) => {
+  const id = positiveInteger(req.params.id, 'ID техники');
+  const used = await prisma.equipmentVehicle.findUniqueOrThrow({ where: { id }, include: { _count: { select: { trips: true, expenses: true } } } });
+  if (used._count.trips || used._count.expenses) throw new InputError('Нельзя удалить технику с ходками или расходами');
+  res.json(await prisma.equipmentVehicle.delete({ where: { id } }));
+});
+const equipmentTripData = (body: any) => ({ vehicleId: positiveInteger(body.vehicleId, 'Техника'), date: calendarDate(body.date), destination: requiredText(body.destination, 'Куда ездил', 250), amount: nonNegativeNumber(body.amount, 'Цена'), mileage: body.mileage === '' || body.mileage == null ? null : nonNegativeNumber(body.mileage, 'Пробег'), comment: optionalText(body.comment), paid: body.paid === true || body.paid === 'true' || body.paid === 'on' });
+app.get('/api/equipment/trips', async (_req, res) => res.json(await prisma.equipmentTrip.findMany({ include: { vehicle: true }, orderBy: [{ date: 'desc' }, { id: 'desc' }] })));
+app.post('/api/equipment/trips', async (req, res) => res.status(201).json(await prisma.equipmentTrip.create({ data: equipmentTripData(req.body), include: { vehicle: true } })));
+app.patch('/api/equipment/trips/:id', async (req, res) => res.json(await prisma.equipmentTrip.update({ where: { id: positiveInteger(req.params.id, 'ID ходки') }, data: equipmentTripData(req.body), include: { vehicle: true } })));
+app.patch('/api/equipment/trips/:id/paid', async (req, res) => res.json(await prisma.equipmentTrip.update({ where: { id: positiveInteger(req.params.id, 'ID ходки') }, data: { paid: req.body.paid === true || req.body.paid === 'true' || req.body.paid === 'on' } })));
+app.delete('/api/equipment/trips/:id', async (req, res) => res.json(await prisma.equipmentTrip.delete({ where: { id: positiveInteger(req.params.id, 'ID ходки') } })));
+app.get('/api/equipment/categories', async (_req, res) => res.json(await prisma.equipmentExpenseCategory.findMany({ orderBy: { name: 'asc' } })));
+app.post('/api/equipment/categories', async (req, res) => res.status(201).json(await prisma.equipmentExpenseCategory.create({ data: { name: requiredText(req.body.name, 'Название категории', 50) } })));
+app.delete('/api/equipment/categories/:id', async (req, res) => {
+  const id = positiveInteger(req.params.id, 'ID категории');
+  if (await prisma.equipmentExpense.count({ where: { categoryId: id } })) throw new InputError('Категория уже используется в расходах');
+  res.json(await prisma.equipmentExpenseCategory.delete({ where: { id } }));
+});
+const equipmentExpenseData = (body: any) => ({ vehicleId: positiveInteger(body.vehicleId, 'Техника'), categoryId: positiveInteger(body.categoryId, 'Категория'), date: calendarDate(body.date), amount: positiveNumber(body.amount, 'Сумма'), comment: optionalText(body.comment) });
+app.get('/api/equipment/expenses', async (_req, res) => res.json(await prisma.equipmentExpense.findMany({ include: { vehicle: true, category: true }, orderBy: [{ date: 'desc' }, { id: 'desc' }] })));
+app.post('/api/equipment/expenses', async (req, res) => res.status(201).json(await prisma.equipmentExpense.create({ data: equipmentExpenseData(req.body), include: { vehicle: true, category: true } })));
+app.patch('/api/equipment/expenses/:id', async (req, res) => res.json(await prisma.equipmentExpense.update({ where: { id: positiveInteger(req.params.id, 'ID расхода') }, data: equipmentExpenseData(req.body), include: { vehicle: true, category: true } })));
+app.delete('/api/equipment/expenses/:id', async (req, res) => res.json(await prisma.equipmentExpense.delete({ where: { id: positiveInteger(req.params.id, 'ID расхода') } })));
+app.get('/api/equipment/analytics', async (req, res) => {
+  const vehicleId = req.query.vehicleId && req.query.vehicleId !== 'all' ? positiveInteger(req.query.vehicleId, 'Техника') : undefined;
+  let from = startOfMoscowPeriod(req.query.period), to: Date | undefined;
+  if (req.query.period === 'custom') {
+    from = calendarDate(req.query.from);
+    to = new Date(calendarDate(req.query.to).getTime() + 24 * 60 * 60 * 1000);
+  }
+  const where = { ...(vehicleId ? { vehicleId } : {}), date: { gte: from, ...(to ? { lt: to } : {}) } };
+  const [trips, expenses] = await Promise.all([prisma.equipmentTrip.findMany({ where, include: { vehicle: true }, orderBy: { date: 'asc' } }), prisma.equipmentExpense.findMany({ where, include: { vehicle: true, category: true }, orderBy: { date: 'asc' } })]);
+  const paidRevenue = trips.filter(x => x.paid).reduce((sum, x) => sum + n(x.amount), 0), unpaid = trips.filter(x => !x.paid).reduce((sum, x) => sum + n(x.amount), 0), costs = expenses.reduce((sum, x) => sum + n(x.amount), 0);
+  const byVehicle = Object.values([...trips, ...expenses].reduce<Record<number, { vehicleId: number; name: string; revenue: number; unpaid: number; expenses: number; trips: number }>>((all, row) => { const item = all[row.vehicleId] ?? { vehicleId: row.vehicleId, name: row.vehicle.name, revenue: 0, unpaid: 0, expenses: 0, trips: 0 }; if ('paid' in row) { item.trips++; if (row.paid) item.revenue += n(row.amount); else item.unpaid += n(row.amount); } else item.expenses += n(row.amount); all[row.vehicleId] = item; return all; }, {})).map(x => ({ ...x, profit: x.revenue - x.expenses }));
+  res.json({ from, to: to ?? new Date(), revenue: paidRevenue, expenses: costs, profit: paidRevenue - costs, unpaid, trips: trips.length, byVehicle });
+});
+
 app.get('/api/historical-bags', async (_req, res) => res.json(await prisma.historicalBagEntry.findMany({ orderBy: [{ date: 'desc' }, { grade: 'asc' }] })));
 app.post('/api/historical-bags', async (req, res) => {
   const date = calendarDate(req.body.date);
@@ -574,7 +615,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260731-3';
+  webAppUrl.pathname = '/app-20260801-1';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));

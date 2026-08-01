@@ -178,6 +178,50 @@ model DanilovaReceipt {
   updatedAt DateTime @updatedAt
 }
 
+model EquipmentVehicle {
+  id Int @id @default(autoincrement())
+  name String
+  note String?
+  active Boolean @default(true)
+  trips EquipmentTrip[]
+  expenses EquipmentExpense[]
+  createdAt DateTime @default(now())
+}
+
+model EquipmentTrip {
+  id Int @id @default(autoincrement())
+  vehicleId Int
+  vehicle EquipmentVehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  date DateTime
+  destination String
+  amount Decimal @db.Decimal(14, 2)
+  mileage Decimal? @db.Decimal(12, 2)
+  comment String?
+  paid Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model EquipmentExpenseCategory {
+  id Int @id @default(autoincrement())
+  name String @unique
+  expenses EquipmentExpense[]
+  createdAt DateTime @default(now())
+}
+
+model EquipmentExpense {
+  id Int @id @default(autoincrement())
+  vehicleId Int
+  vehicle EquipmentVehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  categoryId Int
+  category EquipmentExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  date DateTime
+  amount Decimal @db.Decimal(14, 2)
+  comment String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model CashAdjustment {
   id Int @id @default(autoincrement())
   date DateTime
