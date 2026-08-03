@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Material {
+  SAND
+  GRAVEL
+}
+
+enum ExpenseCategory {
+  SALARY
+  BULK_SALARY
+  WATER
+  DELIVERY
+  RENT
+  ELECTRICITY
+  FUEL
+  REPAIR
+  PACKAGING
+  OTHER
+}
+
+enum BarrelOperationType {
+  RECEIPT
+  CONSUMPTION
+}
+
+enum CementGrade {
+  M500
+  M600
+}
+
+model User {
+  id Int @id @default(autoincrement())
+  telegramId BigInt @unique
+  name String
+  createdAt DateTime @default(now())
+}
+
+model Worker {
+  id Int @id @default(autoincrement())
+  name String
+  phone String?
+  position String
+  active Boolean @default(true)
+  shifts ShiftWorker[]
+  createdAt DateTime @default(now())
+}
+
+model Shift {
+  id Int @id @default(autoincrement())
+  date DateTime
+  bags Int
+  tons Decimal @db.Decimal(12, 3)
+  loadingTons Decimal @default(0) @db.Decimal(12, 3)
+  loadingMaterial Material?
+  packagingPay Decimal @db.Decimal(14, 2)
+  loadingPay Decimal @db.Decimal(14, 2)
+  barrelId Int
+  grade CementGrade @default(M500)
+  barrel Barrel @relation(fields: [barrelId], references: [id])
+  workers ShiftWorker[]
+  createdAt DateTime @default(now())
+}
+
+model ShiftWorker {
+  shiftId Int
+  workerId Int
+  salary Decimal @db.Decimal(14, 2)
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  worker Worker @relation(fields: [workerId], references: [id])
+  @@id([shiftId, workerId])
+}
+
+model Barrel {
+  id Int @id
+  name String
+  operations BarrelOperation[]
+  shifts Shift[]
+  concreteSales ConcreteSale[]
+}
+
+model BarrelOperation {
+  id Int @id @default(autoincrement())
+  barrelId Int
+  barrel Barrel @relation(fields: [barrelId], references: [id])
+  type BarrelOperationType
+  grade CementGrade @default(M500)
+  date DateTime
+  tons Decimal @db.Decimal(12, 3)
+  pricePerTon Decimal? @db.Decimal(14, 2)
+  amount Decimal? @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+}
+
+model CementSale {
+  id Int @id @default(autoincrement())
+  date DateTime
+  client String
+  bags Int
+  grade CementGrade @default(M500)
+  pricePerBag Decimal @db.Decimal(14, 2)
+  amount Decimal @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+}
+
+model ConcreteSale {
+  id Int @id @default(autoincrement())
+  date DateTime
+  concreteGrade String
+  address String
+  vehicle String @default("Не указано")
+  volume Decimal @db.Decimal(12, 3)
+  pricePerM3 Decimal @db.Decimal(14, 2)
+  amount Decimal @db.Decimal(14, 2)
+  paid Boolean @default(false)
+  moneyAtDanilova Boolean @default(false)
+  cementGrade CementGrade?
+  barrelId Int?
+  barrel Barrel? @relation(fields: [barrelId], references: [id])
+  cementTons Decimal @default(0) @db.Decimal(12, 3)
+  createdAt DateTime @default(now())
+}
+
+model MaterialSale {
+  id Int @id @default(autoincrement())
+  date DateTime
+  material Material
+  tons Decimal @db.Decimal(12, 3)
+  pricePerTon Decimal @db.Decimal(14, 2)
+  amount Decimal @db.Decimal(14, 2)
+  includeInFinance Boolean @default(false)
+  loadingSalaryExpense Expense?
+  createdAt DateTime @default(now())
+}
+
+model Expense {
+  id Int @id @default(autoincrement())
+  date DateTime
+  category ExpenseCategory
+  amount Decimal @db.Decimal(14, 2)
+  comment String?
+  materialSaleId Int? @unique
+  materialSale MaterialSale? @relation(fields: [materialSaleId], references: [id], onDelete: Cascade)
+  customCategoryId Int?
+  customCategory ExpenseCategoryOption? @relation(fields: [customCategoryId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+}
+
+model ExpenseCategoryOption {
+  id Int @id @default(autoincrement())
+  name String @unique
+  expenses Expense[]
+  createdAt DateTime @default(now())
+}
+
+model CashCollection {
+  id Int @id @default(autoincrement())
+  amount Decimal @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+}
+
+model DanilovaReceipt {
+  id Int @id @default(autoincrement())
+  date DateTime
+  vehicle String
+  destination String
+  concreteGrade String
+  volume Decimal @db.Decimal(12, 3)
+  pricePerM3 Decimal @db.Decimal(14, 2)
+  amount Decimal @db.Decimal(14, 2)
+  paid Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model EquipmentVehicle {
+  id Int @id @default(autoincrement())
+  name String
+  note String?
+  active Boolean @default(true)
+  trips EquipmentTrip[]
+  expenses EquipmentExpense[]
+  createdAt DateTime @default(now())
+}
+
+model EquipmentTrip {
+  id Int @id @default(autoincrement())
+  vehicleId Int
+  vehicle EquipmentVehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  date DateTime
+  destination String
+  amount Decimal @db.Decimal(14, 2)
+  mileage Decimal? @db.Decimal(12, 2)
+  comment String?
+  paid Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model EquipmentExpenseCategory {
+  id Int @id @default(autoincrement())
+  name String @unique
+  expenses EquipmentExpense[]
+  createdAt DateTime @default(now())
+}
+
+model EquipmentExpense {
+  id Int @id @default(autoincrement())
+  vehicleId Int
+  vehicle EquipmentVehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  categoryId Int
+  category EquipmentExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  date DateTime
+  amount Decimal @db.Decimal(14, 2)
+  comment String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CashAdjustment {
+  id Int @id @default(autoincrement())
+  date DateTime
+  amount Decimal @db.Decimal(14, 2)
+  note String
+  createdAt DateTime @default(now())
+}
+
+model SalaryReset {
+  id Int @id @default(autoincrement())
+  createdAt DateTime @default(now())
+}
+
+model ConcreteNorm {
+  id Int @id @default(autoincrement())
+  name String
+  grade CementGrade
+  cementKgPerM3 Decimal @db.Decimal(10, 2)
+  pricePerM3 Decimal @default(0) @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model HistoricalBagEntry {
+  id Int @id @default(autoincrement())
+  date DateTime
+  grade CementGrade
+  producedBags Int
+  soldBags Int
+  createdAt DateTime @default(now())
+
+  @@unique([date, grade])
+}

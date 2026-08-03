@@ -1,0 +1,19 @@
+crm-cement.ru {
+  encode zstd gzip
+
+  handle /api/* {
+    reverse_proxy backend:3000
+  }
+
+  handle /health {
+    reverse_proxy backend:3000
+  }
+
+  handle {
+    reverse_proxy frontend:80
+  }
+}
+
+www.crm-cement.ru {
+  redir https://crm-cement.ru{uri} permanent
+}

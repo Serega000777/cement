@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+*.log
+*.tsbuildinfo
+.idea
+.vscode
+.deploy/
+backend/prisma/dev.db
