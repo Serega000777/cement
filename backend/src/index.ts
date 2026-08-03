@@ -380,6 +380,10 @@ const danilovaData = (body: any) => {
   };
 };
 app.get('/api/danilova', async (_req, res) => res.json(await prisma.danilovaReceipt.findMany({ orderBy: [{ date: 'desc' }, { id: 'desc' }] })));
+app.get('/api/danilova-concrete', async (_req, res) => res.json(await prisma.concreteSale.findMany({
+  where: { moneyAtDanilova: true },
+  orderBy: [{ date: 'desc' }, { id: 'desc' }]
+})));
 app.post('/api/danilova', async (req, res) => res.status(201).json(await prisma.danilovaReceipt.create({ data: danilovaData(req.body) })));
 app.patch('/api/danilova/:id', async (req, res) => res.json(await prisma.danilovaReceipt.update({ where: { id: positiveInteger(req.params.id, 'ID записи') }, data: { ...danilovaData(req.body), updatedAt: new Date() } })));
 app.patch('/api/danilova/:id/paid', async (req, res) => {
@@ -624,7 +628,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260801-4';
+  webAppUrl.pathname = '/app-20260803-1';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
