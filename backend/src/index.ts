@@ -514,7 +514,7 @@ app.get('/api/equipment/analytics', async (req, res) => {
   const [trips, expenses] = await Promise.all([prisma.equipmentTrip.findMany({ where, include: { vehicle: true }, orderBy: { date: 'asc' } }), prisma.equipmentExpense.findMany({ where, include: { vehicle: true, category: true }, orderBy: { date: 'asc' } })]);
   const paidRevenue = trips.filter(x => x.paid).reduce((sum, x) => sum + n(x.amount), 0), unpaid = trips.filter(x => !x.paid).reduce((sum, x) => sum + n(x.amount), 0), costs = expenses.reduce((sum, x) => sum + n(x.amount), 0);
   const byVehicle = Object.values([...trips, ...expenses].reduce<Record<number, { vehicleId: number; name: string; revenue: number; unpaid: number; expenses: number; trips: number }>>((all, row) => { const item = all[row.vehicleId] ?? { vehicleId: row.vehicleId, name: row.vehicle.name, revenue: 0, unpaid: 0, expenses: 0, trips: 0 }; if ('paid' in row) { item.trips++; if (row.paid) item.revenue += n(row.amount); else item.unpaid += n(row.amount); } else item.expenses += n(row.amount); all[row.vehicleId] = item; return all; }, {})).map(x => ({ ...x, profit: x.revenue - x.expenses }));
-  res.json({ from, to: to ?? new Date(), revenue: paidRevenue, expenses: costs, profit: paidRevenue - costs, unpaid, trips: trips.length, byVehicle });
+  res.json({ from, to: to ?? new Date(), revenue: paidRevenue, expenses: costs, profit: paidRevenue - costs, unpaid, trips: trips.length, byVehicle, tripRows: trips, expenseRows: expenses });
 });
 
 app.get('/api/historical-bags', async (_req, res) => res.json(await prisma.historicalBagEntry.findMany({ orderBy: [{ date: 'desc' }, { grade: 'asc' }] })));
@@ -628,7 +628,7 @@ const port = Number(process.env.PORT || 3000); app.listen(port, () => console.lo
 if (process.env.BOT_TOKEN && process.env.WEBAPP_URL) {
   const bot = new Telegraf(process.env.BOT_TOKEN);
   const webAppUrl = new URL(process.env.WEBAPP_URL);
-  webAppUrl.pathname = '/app-20260803-1';
+  webAppUrl.pathname = '/app-20260803-2';
   webAppUrl.search = '';
   const versionedWebAppUrl = webAppUrl.toString();
   bot.start(ctx => ctx.reply('Cement CRM — управление производством и финансами', Markup.inlineKeyboard([Markup.button.webApp('Открыть Cement CRM', versionedWebAppUrl)])));
